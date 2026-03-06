@@ -390,7 +390,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum Modifications {
+pub enum Modifications {
     /// Use `pip install` semantics, whereby existing installations are left as-is, unless they are
     /// marked for re-installation or upgrade.
     ///

@@ -23,7 +23,7 @@ pub(crate) use help::help;
 pub(crate) use pip::check::pip_check;
 pub(crate) use pip::compile::pip_compile;
 pub(crate) use pip::freeze::pip_freeze;
-pub(crate) use pip::install::pip_install;
+pub use pip::install::pip_install;
 pub(crate) use pip::list::pip_list;
 pub(crate) use pip::show::pip_show;
 pub(crate) use pip::sync::pip_sync;
@@ -96,7 +96,7 @@ mod venv;
 mod workspace;
 
 #[derive(Copy, Clone)]
-pub(crate) enum ExitStatus {
+pub enum ExitStatus {
     /// The command succeeded.
     Success,
 

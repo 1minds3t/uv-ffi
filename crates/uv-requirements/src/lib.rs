@@ -13,7 +13,7 @@ mod extras;
 mod lookahead;
 mod source_tree;
 mod sources;
-mod specification;
+pub mod specification;
 mod unnamed;
 pub mod upgrade;
 
