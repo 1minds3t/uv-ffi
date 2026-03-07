@@ -1,10 +1,17 @@
-mod ffi_run;
-use ffi_run::run_install;
+use std::ffi::OsString;
+use once_cell::sync::Lazy;
+use std::sync::Mutex;
 
-static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
-/// run("pip install rich==14.3.2") -> (rc: int, stdout: str, stderr: str)
-/// Calls pip_install directly — no fork, no CLI re-init, unlimited calls.
+fn run_install(cmd: &str) -> i32 {
+    let args: Vec<OsString> = std::iter::once(OsString::from("uv"))
+        .chain(cmd.split_whitespace().map(OsString::from))
+        .collect();
+    unsafe { uv::main(args) };
+    0
+}
+
 #[pyo3::pyfunction]
 fn run(cmd: &str) -> pyo3::PyResult<(i32, String, String)> {
     let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -32,7 +39,7 @@ fn run(cmd: &str) -> pyo3::PyResult<(i32, String, String)> {
 
     #[cfg(windows)]
     {
-        use std::sync::{Arc, Mutex};
+        use std::sync::{Arc, Mutex as StdMutex};
         use std::io::Read;
         use std::os::windows::io::{IntoRawHandle, FromRawHandle};
 
@@ -40,7 +47,7 @@ fn run(cmd: &str) -> pyo3::PyResult<(i32, String, String)> {
             pyo3::exceptions::PyRuntimeError::new_err(format!("pipe failed: {}", e))
         )?;
 
-        let stderr_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let stderr_buf = Arc::new(StdMutex::new(Vec::<u8>::new()));
         let stderr_buf2 = stderr_buf.clone();
         let reader_thread = std::thread::spawn(move || {
             let mut buf = Vec::new();
@@ -50,11 +57,11 @@ fn run(cmd: &str) -> pyo3::PyResult<(i32, String, String)> {
 
         let writer_fd = writer.into_raw_handle() as i32;
         let rc = unsafe {
-            let saved = libc::_dup(2);
-            libc::_dup2(writer_fd, 2);
+            let saved = libc::dup(2);
+            libc::dup2(writer_fd, 2);
             let rc = run_install(cmd);
-            libc::_dup2(saved, 2);
-            libc::_close(saved);
+            libc::dup2(saved, 2);
+            libc::close(saved);
             drop(std::fs::File::from_raw_handle(writer_fd as _));
             rc
         };
