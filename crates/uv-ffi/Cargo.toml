@@ -3,9 +3,6 @@ name = "uv-ffi"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-default = []
-windows-pipe = ["os_pipe"]
 
 [lib]
 name = "uv_ffi"
