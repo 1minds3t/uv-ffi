@@ -24,10 +24,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: pip install cibuildwheel==2.22.0
+      - name: Install cibuildwheel
+        run: pip install cibuildwheel==2.23.0
 
-      - name: Build wheels
-        working-directory: crates/uv-ffi
+      - name: Build wheels (with retry)
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 60
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            cd crates/uv-ffi
+            python -m cibuildwheel --output-dir ${{ github.workspace }}/wheels/
         env:
           CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
           CIBW_SKIP: "*-win32 *-musllinux* pp*"
@@ -40,7 +48,6 @@ jobs:
           CIBW_ENVIRONMENT: >
             PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
             PATH="$HOME/.cargo/bin:$PATH"
-        run: python -m cibuildwheel --output-dir ${{ github.workspace }}/wheels/
 
       - uses: actions/upload-artifact@v4
         with:
