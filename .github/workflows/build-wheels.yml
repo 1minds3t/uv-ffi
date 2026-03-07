@@ -58,7 +58,7 @@ jobs:
           path: wheels/
 
   build-windows:
-    runs-on: windows-latest
+    runs-on: [self-hosted, windows, x64]
     strategy:
       fail-fast: false
       matrix:
