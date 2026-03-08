@@ -1,11 +1,9 @@
 name: "🔧 Build uv-ffi Wheels"
-
 on:
   push:
     branches: [omnipkg-ffi-v0.10.8]
     tags: ["v*"]
   workflow_dispatch:
-
 jobs:
   build-linux:
     runs-on: ubuntu-latest
@@ -57,22 +55,68 @@ jobs:
           name: wheels-${{ matrix.os }}-py${{ matrix.python }}
           path: wheels/
 
+  setup-windows-python:
+    runs-on: [self-hosted, windows, x64]
+    steps:
+      - name: Install all Python versions
+        shell: powershell
+        run: |
+          $versions = @(
+            @{ver="3.8.20";  short="38"},
+            @{ver="3.9.13";  short="39"},
+            @{ver="3.10.11"; short="310"},
+            @{ver="3.11.9";  short="311"},
+            @{ver="3.12.10"; short="312"},
+            @{ver="3.13.2";  short="313"},
+            @{ver="3.14.0a6";short="314"}
+          )
+          foreach ($p in $versions) {
+            $dest = "C:\Python$($p.short)"
+            if (Test-Path "$dest\python.exe") {
+              Write-Host "Python $($p.ver) already installed at $dest"
+              continue
+            }
+            $v = $p.ver
+            if ($v -like "*a*") {
+              $url = "https://www.python.org/ftp/python/3.14.0/python-3.14.0a6-amd64.exe"
+            } else {
+              $url = "https://www.python.org/ftp/python/$v/python-$v-amd64.exe"
+            }
+            Write-Host "Downloading Python $v from $url"
+            Invoke-WebRequest $url -OutFile "C:\python-$v.exe"
+            Start-Process "C:\python-$v.exe" -ArgumentList "/quiet InstallAllUsers=0 TargetDir=$dest PrependPath=0 Include_launcher=0" -Wait
+            Remove-Item "C:\python-$v.exe" -Force
+            Write-Host "Installed Python $v at $dest"
+          }
+
   build-windows:
     runs-on: [self-hosted, windows, x64]
+    needs: setup-windows-python
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          - python: "3.8"
+            pypath: 'C:\Python38\python.exe'
+          - python: "3.9"
+            pypath: 'C:\Python39\python.exe'
+          - python: "3.10"
+            pypath: 'C:\Python310\python.exe'
+          - python: "3.11"
+            pypath: 'C:\Python311\python.exe'
+          - python: "3.12"
+            pypath: 'C:\Python312\python.exe'
+          - python: "3.13"
+            pypath: 'C:\Python313\python.exe'
+          - python: "3.14"
+            pypath: 'C:\Python314\python.exe'
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
-          args: --release --out ${{ github.workspace }}/wheels/
+          args: --release --out ${{ github.workspace }}/wheels/ --interpreter ${{ matrix.pypath }}
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
       - uses: actions/upload-artifact@v4
@@ -91,20 +135,17 @@ jobs:
           ref: development
           ssh-key: ${{ secrets.OMNIPKG_DEPLOY_KEY }}
           path: omnipkg
-
       - uses: actions/download-artifact@v4
         with:
           pattern: wheels-*
           merge-multiple: true
           path: new-wheels/
-
       - name: Replace wheels in omnipkg
         run: |
           mkdir -p omnipkg/src/omnipkg/_vendor/wheels/
           rm -f omnipkg/src/omnipkg/_vendor/wheels/*.whl
           cp new-wheels/*.whl omnipkg/src/omnipkg/_vendor/wheels/
           echo "## Wheels built:" && ls -lh omnipkg/src/omnipkg/_vendor/wheels/
-
       - name: Commit and push
         run: |
           cd omnipkg
