@@ -124,6 +124,14 @@ jobs:
             pypath: 'C:\Python314\python.exe'
     steps:
       - uses: actions/checkout@v4
+      - name: Add MSVC to PATH
+        shell: cmd
+        run: |
+          call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+          echo PATH=%PATH% >> %GITHUB_ENV%
+          echo INCLUDE=%INCLUDE% >> %GITHUB_ENV%
+          echo LIB=%LIB% >> %GITHUB_ENV%
+          echo LIBPATH=%LIBPATH% >> %GITHUB_ENV%
       - name: Build wheel
         shell: powershell
         run: |
