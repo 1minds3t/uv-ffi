@@ -91,32 +91,21 @@ jobs:
 
   build-windows:
     runs-on: [self-hosted, windows, x64]
-    needs: setup-windows-python
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - python: "3.8"
-            pypath: 'C:\Python38\python.exe'
-          - python: "3.9"
-            pypath: 'C:\Python39\python.exe'
-          - python: "3.10"
-            pypath: 'C:\Python310\python.exe'
-          - python: "3.11"
-            pypath: 'C:\Python311\python.exe'
-          - python: "3.12"
-            pypath: 'C:\Python312\python.exe'
-          - python: "3.13"
-            pypath: 'C:\Python313\python.exe'
-          - python: "3.14"
-            pypath: 'C:\Python314\python.exe'
+        python:["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"] # Removed 3.14 to avoid the registry crash
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
-          args: --release --out ${{ github.workspace }}/wheels/ --interpreter ${{ matrix.pypath }}
+          # ADDED THE INTERPRETER FLAG HERE:
+          args: --release --out ${{ github.workspace }}/wheels/ --interpreter python${{ matrix.python }}
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
       - uses: actions/upload-artifact@v4
