@@ -124,20 +124,15 @@ jobs:
             pypath: 'C:\Python314\python.exe'
     steps:
       - uses: actions/checkout@v4
-      - name: Install maturin
-        shell: powershell
-        run: C:\Python313\python.exe -m pip install "maturin>=1.0,<2.0"
-
       - name: Build wheel
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: crates/uv-ffi
-          args: --release --out ${{ github.workspace }}/wheels/ --interpreter ${{ matrix.pypath }}
-          maturin-version: local
+        shell: powershell
+        run: |
+          $env:RUSTUP_HOME = "C:\rustup-home"
+          $env:CARGO_HOME = "C:\cargo-home"
+          $env:PATH = "C:\cargo-home\bin;" + $env:PATH
+          C:\Python313\python.exe -m maturin build --release --out "${{ github.workspace }}\wheels" --interpreter ${{ matrix.pypath }} --manifest-path crates/uv-ffi/Cargo.toml
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
-          RUSTUP_HOME: C:\rustup-home
-          CARGO_HOME: C:\cargo-home
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-windows-py${{ matrix.python }}
