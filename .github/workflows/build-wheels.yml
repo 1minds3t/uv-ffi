@@ -92,8 +92,6 @@ jobs:
   build-windows:
     runs-on: [self-hosted, windows, x64]
     needs: setup-windows-python
-    env:
-      PATH: C:\Users\1mind\.cargo\bin;${{ env.PATH }}
     strategy:
       fail-fast: false
       matrix:
@@ -114,6 +112,11 @@ jobs:
             pypath: 'C:\Python314\python.exe'
     steps:
       - uses: actions/checkout@v4
+      - name: Add Rust to PATH
+        shell: powershell
+        run: |
+          $rustPath = "$env:USERPROFILE\.cargo\bin"
+          echo "$rustPath" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
