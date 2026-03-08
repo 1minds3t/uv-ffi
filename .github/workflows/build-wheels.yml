@@ -92,6 +92,8 @@ jobs:
   build-windows:
     runs-on: [self-hosted, windows, x64]
     needs: setup-windows-python
+    env:
+      PATH: C:\Users\1mind\.cargo\bin;${{ env.PATH }}
     strategy:
       fail-fast: false
       matrix:
