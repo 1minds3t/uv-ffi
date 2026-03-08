@@ -83,9 +83,9 @@ jobs:
               $url = "https://www.python.org/ftp/python/$v/python-$v-amd64.exe"
             }
             Write-Host "Downloading Python $v from $url"
-            Invoke-WebRequest $url -OutFile "C:\python-$v.exe"
-            Start-Process "C:\python-$v.exe" -ArgumentList "/quiet InstallAllUsers=0 TargetDir=$dest PrependPath=0 Include_launcher=0" -Wait
-            Remove-Item "C:\python-$v.exe" -Force
+            Invoke-WebRequest $url -OutFile "$env:TEMP\python-install.exe"
+            Start-Process "$env:TEMP\python-install.exe" -ArgumentList "/quiet InstallAllUsers=0 TargetDir=$dest PrependPath=0 Include_launcher=0" -Wait
+            Remove-Item "$env:TEMP\python-install.exe" -Force -ErrorAction SilentlyContinue
             Write-Host "Installed Python $v at $dest"
           }
 
