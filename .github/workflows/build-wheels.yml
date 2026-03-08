@@ -58,7 +58,19 @@ jobs:
   setup-windows-python:
     runs-on: [self-hosted, windows, x64]
     steps:
+      - name: Check if Python already installed
+        id: check
+        shell: powershell
+        run: |
+          $missing = @("38","39","310","311","312","313") | Where-Object { -not (Test-Path "C:\Python$_\python.exe") }
+          if ($missing.Count -eq 0) {
+            echo "all_installed=true" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "all_installed=false" >> $env:GITHUB_OUTPUT
+            Write-Host "Missing: $($missing -join ', ')"
+          }
       - name: Install all Python versions
+        if: steps.check.outputs.all_installed != 'true'
         shell: powershell
         run: |
           $versions = @(
