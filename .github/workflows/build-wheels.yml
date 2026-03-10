@@ -1,9 +1,9 @@
 name: "🔧 Build uv-ffi Wheels"
 on:
-  push:
-    branches: [omnipkg-ffi-v0.10.8]
-    tags: ["v*"]
+  release:
+    types: [published]
   workflow_dispatch:
+
 jobs:
   build-linux:
     runs-on: ubuntu-latest
@@ -146,33 +146,38 @@ jobs:
           name: wheels-windows-py${{ matrix.python }}
           path: wheels/
 
-  commit-to-omnipkg:
-    name: Commit wheels to omnipkg
+  publish:
+    name: Publish to PyPI
     needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # OIDC trusted publisher
     steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: 1minds3t/omnipkg
-          ref: development
-          ssh-key: ${{ secrets.OMNIPKG_DEPLOY_KEY }}
-          path: omnipkg
       - uses: actions/download-artifact@v4
         with:
           pattern: wheels-*
           merge-multiple: true
-          path: new-wheels/
-      - name: Replace wheels in omnipkg
+          path: dist/
+      - name: List wheels
+        run: ls -lh dist/
+      - name: Publish via OIDC (trusted publisher)
+        id: oidc
+        continue-on-error: true
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+      - name: Publish via API token (fallback)
+        if: steps.oidc.outcome == 'failure' && secrets.PYPI_API_TOKEN != ''
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          password: ${{ secrets.PYPI_API_TOKEN }}
+      - name: Manual fallback instructions
+        if: steps.oidc.outcome == 'failure' && secrets.PYPI_API_TOKEN == ''
         run: |
-          mkdir -p omnipkg/src/omnipkg/_vendor/wheels/
-          rm -f omnipkg/src/omnipkg/_vendor/wheels/*.whl
-          cp new-wheels/*.whl omnipkg/src/omnipkg/_vendor/wheels/
-          echo "## Wheels built:" && ls -lh omnipkg/src/omnipkg/_vendor/wheels/
-      - name: Commit and push
-        run: |
-          cd omnipkg
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add src/omnipkg/_vendor/wheels/
-          git commit -m "chore(wheels): update uv-ffi wheels from uv-ffi@${{ github.sha }}"
-          git push
+          echo "❌ OIDC and API token both failed."
+          echo "👉 Download the wheels artifact and run manually:"
+          echo "   pip install twine"
+          echo "   twine upload dist/*.whl"
+          exit 1
