@@ -362,7 +362,7 @@ Copyright Astral Software Inc.
 ---
 
 **📚 Documentation:**
-- CHANGELOG.md (55 lines)
+- CHANGELOG.md (62 lines)
 
 **⚙️ Configuration:**
 - .github/workflows/publish.yml (51 lines)
@@ -378,4 +378,4 @@ Copyright Astral Software Inc.
 **Updates:**
 - Update build-wheels.yml
 
-_20 files changed, 1281 insertions(+), 620 deletions(-)_
+_20 files changed, 1288 insertions(+), 620 deletions(-)_
