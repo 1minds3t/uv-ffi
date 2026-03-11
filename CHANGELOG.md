@@ -361,6 +361,9 @@ Copyright Astral Software Inc.
 
 ---
 
+**⚙️ Configuration:**
+- .github/workflows/publish.yml (51 lines)
+
 **Bug Fixes:**
 - fix: add LICENSE-MIT and README.md to uv-ffi crate dir — required by maturin
 - fix: add missing README.md to uv-ffi crate dir for maturin
@@ -368,12 +371,4 @@ Copyright Astral Software Inc.
 **Updates:**
 - Update build-wheels.yml
 
-**Other Changes:**
-- ci: add correct maturin publish.yml — downloads artifacts, OIDC + token fallback
-- chore: add license-file + NOTICE for MIT attribution, remove temp patch script
-- chore: update Cargo.lock, remove temp patch script
-- ci: add macos-15-intel for x86_64 wheels
-- ci: retrigger after fixing wheels gitignore in omnipkg
-- ...and 16 more changes
-
-_20 files changed, 1288 insertions(+), 620 deletions(-)_
+_20 files changed, 1286 insertions(+), 620 deletions(-)_
