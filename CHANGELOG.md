@@ -318,7 +318,7 @@ See [changelogs/0.1.x](./changelogs/0.1.x.md)
 
 <!-- prettier-ignore-end -->
 
-## [0.10.8] — 2026-03-10
+## [0.10.8] — 2026-03-11
 
 Fastest Python Package Manager — uv FFI Engine v0.10.8
 
@@ -376,4 +376,4 @@ Copyright Astral Software Inc.
 - ci: retrigger after fixing wheels gitignore in omnipkg
 - ...and 16 more changes
 
-_19 files changed, 1229 insertions(+), 619 deletions(-)_
+_20 files changed, 1288 insertions(+), 620 deletions(-)_
