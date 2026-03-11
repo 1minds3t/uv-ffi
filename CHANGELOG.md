@@ -2,7 +2,6 @@
 
 <!-- prettier-ignore-start -->
 
-
 ## 0.10.8
 
 Released on 2026-03-03.
@@ -319,3 +318,62 @@ See [changelogs/0.1.x](./changelogs/0.1.x.md)
 
 <!-- prettier-ignore-end -->
 
+## [0.10.8] — 2026-03-10
+
+Fastest Python Package Manager — uv FFI Engine v0.10.8
+
+## Overview
+
+uv-ffi is the core engine powering omnipkg's speed advantage over every
+existing Python package manager — including uv itself.
+
+Built on uv v0.10.8 source. Not affiliated with Astral Software Inc.
+
+## Performance
+
+| Operation | omnipkg | uv | improvement |
+|-----------|---------|-----|-------------|
+| Package install (FFI in-process) | ~9ms | ~18ms | **~50% faster** |
+| Full install wall time | ~14-15ms | ~18ms | **~25% faster** |
+| No-op verification | ~4ms | ~11ms | **~63% faster** |
+
+The install gain comes from calling uv's resolver directly in-process via FFI,
+eliminating subprocess binary spawn cost entirely (`user+sys` drops from 0.019s
+to 0.002s). The no-op gain comes from omnipkg's C++ dispatcher routing to a
+pre-warmed hot process — no binary startup at all.
+
+This proves that architecture and innovation matter more than language choice.
+
+## What's in this release
+
+- **uv-ffi crate**: PyO3 extension calling uv's pip_install directly, bypassing
+  clap and OnceLock CLI init entirely
+- **Persistent tokio runtime**: reused across all calls, zero re-init cost
+- **Native stderr capture**: libc `_dup2` + `os_pipe` for diff output cross-platform
+- **Full wheel matrix**: Python 3.8–3.14, Linux x86_64/aarch64, macOS Intel/ARM,
+  Windows x64 — 35 wheels
+- **OIDC trusted publishing**: no stored API tokens
+
+## Attribution
+
+Uses uv source (astral-sh/uv v0.10.8) under the MIT License.
+Copyright Astral Software Inc.
+
+---
+
+**Bug Fixes:**
+- fix: add LICENSE-MIT and README.md to uv-ffi crate dir — required by maturin
+- fix: add missing README.md to uv-ffi crate dir for maturin
+
+**Updates:**
+- Update build-wheels.yml
+
+**Other Changes:**
+- ci: add correct maturin publish.yml — downloads artifacts, OIDC + token fallback
+- chore: add license-file + NOTICE for MIT attribution, remove temp patch script
+- chore: update Cargo.lock, remove temp patch script
+- ci: add macos-15-intel for x86_64 wheels
+- ci: retrigger after fixing wheels gitignore in omnipkg
+- ...and 16 more changes
+
+_19 files changed, 1229 insertions(+), 619 deletions(-)_
