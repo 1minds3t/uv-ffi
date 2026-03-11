@@ -26,8 +26,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # On release trigger: use the release tag
-          # On manual trigger: use input tag, or fall back to latest release tag
           if [ "${{ github.event_name }}" = "release" ]; then
             TAG="${{ github.event.release.tag_name }}"
           elif [ -n "${{ github.event.inputs.tag }}" ]; then
@@ -39,14 +37,12 @@ jobs:
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Resolved tag: $TAG"
 
-          # Find build-wheels run that matches this tag (check recent runs)
           echo "Searching for completed build-wheels run for tag $TAG..."
           RUN_ID=$(gh api \
             "repos/${{ github.repository }}/actions/workflows/build-wheels.yml/runs?per_page=20" \
             --jq ".workflow_runs[] | select(.head_branch == \"$TAG\" or .display_title == \"$TAG\" or (.head_commit.message | test(\"$TAG\"))) | .id" \
             2>/dev/null | head -1)
 
-          # Fallback: just grab the most recent successful one
           if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
             echo "  Tag match not found, trying most recent successful run..."
             RUN_ID=$(gh api \
@@ -116,12 +112,18 @@ jobs:
           name_is_regexp: true
           merge_multiple: true
           path: dist/
-          if_no_artifact_found: fail
 
-      - name: List wheels
+      - name: Flatten wheels into dist/
         run: |
-          echo "Wheels to publish:"
-          ls -lh dist/
+          echo "Before flatten:"
+          ls dist/
+          # Move all .whl files from subdirs up to dist/ root
+          find dist/ -name "*.whl" -not -path "dist/*.whl" -exec mv {} dist/ \;
+          # Remove empty subdirs
+          find dist/ -mindepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
+          echo "After flatten:"
+          ls -lh dist/*.whl | head -20
+          echo "Total wheels: $(ls dist/*.whl | wc -l)"
 
       - name: Publish via OIDC (trusted publisher)
         id: oidc
