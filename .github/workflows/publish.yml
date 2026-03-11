@@ -1,12 +1,15 @@
 name: Publish to PyPI
-
 on:
   release:
     types: [published]
-
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (e.g. v0.10.8) — uses existing build-wheels artifacts'
+        required: false
+        default: ''
 permissions:
   contents: read
-
 jobs:
   pypi-publish:
     name: Upload release to PyPI
@@ -17,67 +20,98 @@ jobs:
     permissions:
       id-token: write
       actions: read
-
     steps:
-      - name: Wait for wheel artifacts to exist
+      - name: Resolve tag and find build-wheels run
+        id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Polling for wheel artifacts from build-wheels.yml..."
-          TIMEOUT=7200
+          # On release trigger: use the release tag
+          # On manual trigger: use input tag, or fall back to latest release tag
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          elif [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
+            echo "No tag specified, using latest release: $TAG"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Resolved tag: $TAG"
+
+          # Find build-wheels run that matches this tag (check recent runs)
+          echo "Searching for completed build-wheels run for tag $TAG..."
+          RUN_ID=$(gh api \
+            "repos/${{ github.repository }}/actions/workflows/build-wheels.yml/runs?per_page=20" \
+            --jq ".workflow_runs[] | select(.head_branch == \"$TAG\" or .display_title == \"$TAG\" or (.head_commit.message | test(\"$TAG\"))) | .id" \
+            2>/dev/null | head -1)
+
+          # Fallback: just grab the most recent successful one
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "  Tag match not found, trying most recent successful run..."
+            RUN_ID=$(gh api \
+              "repos/${{ github.repository }}/actions/workflows/build-wheels.yml/runs?status=success&per_page=5" \
+              --jq '.workflow_runs[0].id' 2>/dev/null)
+          fi
+
+          echo "build_run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          echo "Found build-wheels run: $RUN_ID"
+
+      - name: Wait for build-wheels to complete (release trigger only)
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID="${{ steps.resolve.outputs.build_run_id }}"
+          echo "Polling build-wheels run $RUN_ID (no timeout)..."
           INTERVAL=30
           ELAPSED=0
-
           while true; do
-            # Find most recent build-wheels run triggered by a release event
-            RUN_ID=$(gh api \
-              "repos/${{ github.repository }}/actions/workflows/build-wheels.yml/runs?event=release&per_page=5" \
-              --jq '.workflow_runs[0].id' 2>/dev/null)
-
-            if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-              echo "  [${ELAPSED}s] No build-wheels run found yet..."
-            else
-              STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" \
-                --jq '.status' 2>/dev/null)
-              CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" \
-                --jq '.conclusion // ""' 2>/dev/null)
-
-              echo "  [${ELAPSED}s] run=$RUN_ID status=$STATUS conclusion=$CONCLUSION"
-
-              if [ "$STATUS" = "completed" ]; then
-                if [ "$CONCLUSION" = "success" ]; then
-                  # Double-check artifacts actually exist
-                  ARTIFACT_COUNT=$(gh api \
-                    "repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts" \
-                    --jq '.total_count' 2>/dev/null)
-                  echo "  Artifacts found: $ARTIFACT_COUNT"
-                  if [ "$ARTIFACT_COUNT" -gt "0" ]; then
-                    echo "✅ Wheels ready!"
-                    break
-                  else
-                    echo "  Run succeeded but no artifacts yet, waiting..."
-                  fi
-                else
-                  echo "❌ build-wheels failed: $CONCLUSION"
-                  exit 1
+            STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" \
+              --jq '.status' 2>/dev/null)
+            CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" \
+              --jq '.conclusion // ""' 2>/dev/null)
+            echo "  [${ELAPSED}s] status=$STATUS conclusion=$CONCLUSION"
+            if [ "$STATUS" = "completed" ]; then
+              if [ "$CONCLUSION" = "success" ]; then
+                ARTIFACT_COUNT=$(gh api \
+                  "repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts" \
+                  --jq '.total_count' 2>/dev/null)
+                echo "  Artifacts found: $ARTIFACT_COUNT"
+                if [ "$ARTIFACT_COUNT" -gt "0" ]; then
+                  echo "✅ Wheels ready! Total wait: ${ELAPSED}s"
+                  break
                 fi
+              else
+                echo "❌ build-wheels failed: $CONCLUSION"
+                exit 1
               fi
             fi
-
-            if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
-              echo "❌ Timed out after ${TIMEOUT}s waiting for wheels"
-              exit 1
-            fi
-
             sleep $INTERVAL
             ELAPSED=$((ELAPSED + INTERVAL))
           done
+
+      - name: Verify artifacts exist (manual trigger)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID="${{ steps.resolve.outputs.build_run_id }}"
+          ARTIFACT_COUNT=$(gh api \
+            "repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts" \
+            --jq '.total_count' 2>/dev/null)
+          echo "Artifacts found in run $RUN_ID: $ARTIFACT_COUNT"
+          if [ "$ARTIFACT_COUNT" -eq "0" ]; then
+            echo "❌ No artifacts found for run $RUN_ID"
+            exit 1
+          fi
+          echo "✅ $ARTIFACT_COUNT artifacts ready to publish"
 
       - name: Download wheels
         uses: dawidd6/action-download-artifact@v3
         with:
           workflow: build-wheels.yml
-          workflow_conclusion: success
+          run_id: ${{ steps.resolve.outputs.build_run_id }}
           name: wheels-*
           name_is_regexp: true
           merge_multiple: true
