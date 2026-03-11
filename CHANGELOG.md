@@ -361,8 +361,15 @@ Copyright Astral Software Inc.
 
 ---
 
+**📚 Documentation:**
+- CHANGELOG.md (55 lines)
+
 **⚙️ Configuration:**
 - .github/workflows/publish.yml (51 lines)
+
+**Additional Changes:**
+- Update documentation
+- ci(publish): Fix publish workflow
 
 **Bug Fixes:**
 - fix: add LICENSE-MIT and README.md to uv-ffi crate dir — required by maturin
@@ -371,4 +378,4 @@ Copyright Astral Software Inc.
 **Updates:**
 - Update build-wheels.yml
 
-_20 files changed, 1286 insertions(+), 620 deletions(-)_
+_20 files changed, 1281 insertions(+), 620 deletions(-)_
