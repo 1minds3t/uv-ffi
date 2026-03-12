@@ -21,6 +21,13 @@ jobs:
       id-token: write
       actions: read
     steps:
+      - name: Checkout current workflow from HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: omnipkg-ffi-v0.10.8
+          sparse-checkout: .github/workflows/
+          sparse-checkout-cone-mode: false
+
       - name: Resolve tag and find build-wheels run
         id: resolve
         env:
@@ -117,13 +124,11 @@ jobs:
         run: |
           echo "Before flatten:"
           ls dist/
-          # Move all .whl files from subdirs up to dist/ root
-          find dist/ -name "*.whl" -not -path "dist/*.whl" -exec mv {} dist/ \;
-          # Remove empty subdirs
+          find dist/ -name "*.whl" -exec mv {} dist/ \; 2>/dev/null || true
           find dist/ -mindepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
           echo "After flatten:"
-          ls -lh dist/*.whl | head -20
-          echo "Total wheels: $(ls dist/*.whl | wc -l)"
+          ls -lh dist/
+          echo "Total wheels: $(ls dist/*.whl 2>/dev/null | wc -l)"
 
       - name: Publish via OIDC (trusted publisher)
         id: oidc
