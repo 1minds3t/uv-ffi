@@ -93,6 +93,7 @@ Thank you to the uv team for the foundation this is built on.
 
 **📚 Documentation:**
 - CHANGELOG.md (64 lines)
+- crates/uv-ffi/CHANGELOG.md (114 lines)
 - crates/uv-ffi/README.md (152 lines)
 
 **⚙️ Configuration:**
@@ -101,6 +102,7 @@ Thank you to the uv team for the foundation this is built on.
 - pyproject.toml
 
 **Additional Changes:**
+- docs: Prepare changelog for release.
 - docs: Restore UV's changelog.
 - docs: clarify cache coherency model and FS-scan speedup; fix Cargo version
 - feat: uv-ffi v0.10.8.post1 — persistent in-process engine & cache coherency
@@ -110,5 +112,4 @@ Thank you to the uv team for the foundation this is built on.
 **Updates:**
 - Update publish.yml
 
-_17 files changed, 1280 insertions(+), 282 deletions(-)_
-
+_18 files changed, 1394 insertions(+), 282 deletions(-)_
