@@ -30,12 +30,27 @@ pub(crate) enum Level {
 /// The [`Level`] is used to dictate the default filters (which can be overridden by the `RUST_LOG`
 /// environment variable) along with the formatting of the output. For example, [`Level::Verbose`]
 /// includes targets and timestamps, along with all `uv=debug` messages by default.
+use std::sync::atomic::{AtomicBool, Ordering};
+static LOGGING_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
 pub(crate) fn setup_logging(
     level: Level,
     durations_layer: Option<impl Layer<Registry> + Send + Sync>,
     color: ColorChoice,
     detailed_logging: bool,
 ) -> anyhow::Result<()> {
+    // Idempotent init — safe for long-running worker processes
+    if LOGGING_INITIALIZED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Ok(());
+    }
+    // Skip all tracing setup in daemon worker mode
+    if std::env::var("OMNIPKG_WORKER").is_ok() {
+        return Ok(());
+    }
+
     // We use directives here to ensure `RUST_LOG` can override them
     let default_directive = match level {
         Level::Off => {
@@ -99,7 +114,7 @@ pub(crate) fn setup_logging(
                     .with_ansi(ansi)
                     .with_filter(filter),
             )
-            .init();
+            .try_init().ok();
     } else {
         tracing_subscriber::registry()
             .with(durations_layer)
@@ -110,7 +125,7 @@ pub(crate) fn setup_logging(
                     .with_ansi(ansi)
                     .with_filter(filter),
             )
-            .init();
+            .try_init().ok();
     }
 
     Ok(())

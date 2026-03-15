@@ -97,6 +97,7 @@ const STYLES: Styles = Styles::styled()
 
 #[derive(Parser)]
 #[command(name = "uv", author, long_version = crate::version::uv_self_version())]
+
 #[command(about = "An extremely fast Python package manager.")]
 #[command(
     after_help = "Use `uv help` for more details.",
@@ -114,7 +115,7 @@ pub struct Cli {
     pub top_level: TopLevelArgs,
 }
 
-#[derive(Parser)]
+#[derive(Parser, Default)]
 #[command(disable_help_flag = true, disable_version_flag = true)]
 pub struct TopLevelArgs {
     #[command(flatten)]
@@ -154,6 +155,7 @@ pub struct TopLevelArgs {
 
 #[derive(Parser, Debug, Clone)]
 #[command(next_help_heading = "Global options", next_display_order = 1000)]
+#[derive(Default)]
 pub struct GlobalArgs {
     #[arg(
         global = true,
@@ -7948,4 +7950,138 @@ pub enum BuildBackendCommand {
     GetRequiresForBuildEditable,
     /// PEP 660 hook `prepare_metadata_for_build_editable`.
     PrepareMetadataForBuildEditable { wheel_directory: PathBuf },
+}
+
+// ── FFI fast-path constructors ────────────────────────────────────────────────
+impl IndexArgs {
+    pub fn ffi_default() -> Self {
+        Self {
+            index: None,
+            default_index: None,
+            index_url: None,
+            extra_index_url: None,
+            find_links: None,
+            no_index: false,
+        }
+    }
+    pub fn ffi_with_indexes(
+        index_url: Option<String>,
+        extra_index_url: Option<String>,
+    ) -> Self {
+        let mut s = Self::ffi_default();
+        if let Some(u) = extra_index_url {
+            if let Ok(url) = IndexUrl::from_str(&u) {
+                s.extra_index_url = Some(vec![Maybe::Some(PipExtraIndex::from(Index {
+                    origin: Some(Origin::Cli),
+                    ..Index::from_extra_index_url(url)
+                }))]);
+            }
+        }
+        if let Some(u) = index_url {
+            if let Ok(url) = IndexUrl::from_str(&u) {
+                s.index_url = Some(Maybe::Some(PipIndex::from(Index {
+                    origin: Some(Origin::Cli),
+                    ..Index::from_index_url(url)
+                })));
+            }
+        }
+        s
+    }
+}
+
+impl RefreshArgs {
+    pub fn ffi_default() -> Self {
+        Self { refresh: false, no_refresh: false, refresh_package: vec![] }
+    }
+}
+
+impl ResolverInstallerArgs {
+    pub fn ffi_default() -> Self {
+        Self {
+            index_args:                  IndexArgs::ffi_default(),
+            upgrade:                     false,
+            no_upgrade:                  false,
+            upgrade_package:             vec![],
+            reinstall:                   false,
+            no_reinstall:                false,
+            reinstall_package:           vec![],
+            index_strategy:              None,
+            keyring_provider:            None,
+            resolution:                  None,
+            prerelease:                  None,
+            pre:                         false,
+            fork_strategy:               None,
+            config_setting:              None,
+            config_settings_package:     None,
+            no_build_isolation:          false,
+            no_build_isolation_package:  vec![],
+            build_isolation:             false,
+            exclude_newer:               None,
+            exclude_newer_package:       None,
+            link_mode:                   None,
+            compile_bytecode:            false,
+            no_compile_bytecode:         false,
+            no_sources:                  false,
+            no_sources_package:          vec![],
+        }
+    }
+}
+
+impl PipInstallArgs {
+    pub fn ffi_new(
+        packages:        Vec<String>,
+        python:          Option<String>,
+        reinstall:       bool,
+        index_url:       Option<String>,
+        extra_index_url: Option<String>,
+        link_mode:       Option<uv_install_wheel::LinkMode>,
+        quiet:           bool,
+    ) -> Self {
+        let _ = quiet; // quiet is handled at the Cli/TopLevel layer
+        let mut installer = ResolverInstallerArgs::ffi_default();
+        installer.reinstall  = reinstall;
+        installer.link_mode  = link_mode;
+        installer.index_args = IndexArgs::ffi_with_indexes(index_url, extra_index_url);
+        Self {
+            package:               packages,
+            requirements:          vec![],
+            editable:              vec![],
+            constraints:           vec![],
+            overrides:             vec![],
+            excludes:              vec![],
+            build_constraints:     vec![],
+            extra:                 None,
+            all_extras:            false,
+            no_all_extras:         false,
+            group:                 vec![],
+            installer,
+            refresh:               RefreshArgs::ffi_default(),
+            no_deps:               false,
+            deps:                  false,
+            require_hashes:        false,
+            no_require_hashes:     false,
+            verify_hashes:         false,
+            no_verify_hashes:      false,
+            python:                python.map(Maybe::Some),
+            system:                false,
+            no_system:             false,
+            break_system_packages: false,
+            no_break_system_packages: false,
+            target:                None,
+            prefix:                None,
+            no_build:              false,
+            build:                 false,
+            no_binary:             None,
+            only_binary:           None,
+            python_version:        None,
+            python_platform:       None,
+            inexact:               false,
+            exact:                 false,
+            strict:                false,
+            no_strict:             false,
+            dry_run:               false,
+            torch_backend:         None,
+            compat_args:           Default::default(),
+        }
+    }
 }

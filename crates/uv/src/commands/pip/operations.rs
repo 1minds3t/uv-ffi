@@ -407,7 +407,7 @@ pub enum Modifications {
 /// A distribution which was or would be modified
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[expect(clippy::large_enum_variant)]
-pub(crate) enum ChangedDist {
+pub enum ChangedDist {
     Local(LocalDist),
     Remote(Arc<Dist>),
 }
@@ -423,7 +423,7 @@ impl Name for ChangedDist {
 
 /// The [`Version`] or [`VerbatimUrl`] for a changed dist.
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
-pub(crate) enum ShortSpecifier<'a> {
+pub enum ShortSpecifier<'a> {
     Version(&'a Version),
     Url(&'a VerbatimUrl),
 }
@@ -439,7 +439,7 @@ impl std::fmt::Display for ShortSpecifier<'_> {
 
 /// The [`InstalledVersion`] or [`VerbatimUrl`] for a changed dist.
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
-pub(crate) enum LongSpecifier<'a> {
+pub enum LongSpecifier<'a> {
     InstalledVersion(InstalledVersion<'a>),
     Url(&'a VerbatimUrl),
 }
@@ -476,7 +476,7 @@ impl ChangedDist {
         }
     }
 
-    pub(crate) fn version(&self) -> Option<&Version> {
+    pub fn version(&self) -> Option<&Version> {
         match self {
             Self::Local(dist) => Some(dist.installed_version().version()),
             Self::Remote(dist) => dist.version(),
@@ -486,13 +486,13 @@ impl ChangedDist {
 
 /// A summary of the changes made to the environment during an installation.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Changelog {
+pub struct Changelog {
     /// The distributions that were installed.
-    pub(crate) installed: HashSet<ChangedDist>,
+    pub installed: HashSet<ChangedDist>,
     /// The distributions that were uninstalled.
-    pub(crate) uninstalled: HashSet<ChangedDist>,
+    pub uninstalled: HashSet<ChangedDist>,
     /// The distributions that were reinstalled.
-    pub(crate) reinstalled: HashSet<ChangedDist>,
+    pub reinstalled: HashSet<ChangedDist>,
 }
 
 impl Changelog {
@@ -708,11 +708,14 @@ pub(crate) async fn install(
         compile_bytecode(venv, concurrency, cache, printer).await?;
     }
 
+    if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-execute-plan: {:.2}ms", start.elapsed().as_secs_f64()*1000.0); }
     // Construct a summary of the changes made to the environment.
     let changelog = Changelog::from_local(installs, uninstalls);
+    if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-changelog-from-local: {:.2}ms", start.elapsed().as_secs_f64()*1000.0); }
 
     // Notify the user of any environment modifications.
     logger.on_complete(&changelog, printer, dry_run)?;
+    if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-on-complete: {:.2}ms", start.elapsed().as_secs_f64()*1000.0); }
 
     Ok(changelog)
 }

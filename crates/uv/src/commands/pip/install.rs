@@ -205,17 +205,26 @@ pub async fn pip_install(
         report_interpreter(&installation, true, printer)?;
         PythonEnvironment::from_installation(installation)
     } else {
-        let environment = PythonEnvironment::find(
-            &python
-                .as_deref()
-                .map(PythonRequest::parse)
-                .unwrap_or_default(),
-            EnvironmentPreference::from_system_flag(system, true),
-            PythonPreference::default().with_system_flag(system),
-            &cache,
-            preview,
-        )?;
-        report_target_environment(&environment, &cache, printer)?;
+        // Reuse cached PythonEnvironment if available — avoids filesystem search every call.
+        let environment = if let Some(env) = crate::PYTHON_ENVIRONMENT.lock().ok()
+            .and_then(|g| g.clone())
+        {
+            env
+        } else {
+            let env = PythonEnvironment::find(
+                &python
+                    .as_deref()
+                    .map(PythonRequest::parse)
+                    .unwrap_or_default(),
+                EnvironmentPreference::from_system_flag(system, true),
+                PythonPreference::default().with_system_flag(system),
+                &cache,
+                preview,
+            )?;
+            report_target_environment(&env, &cache, printer)?;
+            if let Ok(mut g) = crate::PYTHON_ENVIRONMENT.lock() { *g = Some(env.clone()); }
+            env
+        };
         environment
     };
 
@@ -302,7 +311,25 @@ pub async fn pip_install(
     )?;
 
     // Determine the set of installed packages.
-    let site_packages = SitePackages::from_environment(&environment)?;
+    let _t_sp = std::time::Instant::now();
+    let site_packages = {
+        let force = crate::FORCE_RESCAN.load(std::sync::atomic::Ordering::SeqCst);
+        let cached = if !force {
+            crate::SITE_PACKAGES_CACHE.lock().ok().and_then(|g| g.clone())
+        } else {
+            None
+        };
+        if let Some(sp) = cached {
+            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-site-packages-scan: {:.2}ms (cached)", _t_sp.elapsed().as_secs_f64()*1000.0); }
+            sp
+        } else {
+            let sp = SitePackages::from_environment(&environment)?;
+            if let Ok(mut g) = crate::SITE_PACKAGES_CACHE.lock() { *g = Some(sp.clone()); }
+            crate::FORCE_RESCAN.store(false, std::sync::atomic::Ordering::SeqCst);
+            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-site-packages-scan: {:.2}ms (fresh)", _t_sp.elapsed().as_secs_f64()*1000.0); }
+            sp
+        }
+    };
 
     // Check if the current environment satisfies the requirements.
     // Ideally, the resolver would be fast enough to let us remove this check. But right now, for large environments,
@@ -412,13 +439,22 @@ pub async fn pip_install(
         .transpose()?;
 
     // Initialize the registry client.
-    let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
-        .index_locations(index_locations.clone())
-        .index_strategy(index_strategy)
-        .torch_backend(torch_backend.clone())
-        .markers(interpreter.markers())
-        .platform(interpreter.platform())
-        .build();
+    let client = {
+        let existing = crate::REGISTRY_CLIENT.lock().ok().and_then(|g| g.clone());
+        if let Some(c) = existing {
+            c
+        } else {
+            let c = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
+                .index_locations(index_locations.clone())
+                .index_strategy(index_strategy)
+                .torch_backend(torch_backend.clone())
+                .markers(interpreter.markers())
+                .platform(interpreter.platform())
+                .build();
+            if let Ok(mut g) = crate::REGISTRY_CLIENT.lock() { *g = Some(c.clone()); }
+            c
+        }
+    };
 
     // Combine the `--no-binary` and `--no-build` flags from the requirements files.
     let build_options = build_options.combine(no_binary, no_build);
@@ -670,7 +706,50 @@ pub async fn pip_install(
     )
     .await
     {
-        Ok(..) => {}
+        Ok(changelog) => {
+            let _post_install_start = std::time::Instant::now();
+            let _t_after_install = std::time::Instant::now();
+            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-install-write: done"); }
+            let _sync_start = std::time::Instant::now();
+            if let Ok(mut sp_cache) = crate::SITE_PACKAGES_CACHE.try_lock() {
+                if let Some(ref mut sp) = *sp_cache {
+                    use uv_distribution_types::{Name, InstalledDist, InstalledDistKind, InstalledRegistryDist};
+                    for dist in &changelog.uninstalled { sp.remove_packages(dist.name()); }
+                    for dist in &changelog.reinstalled { sp.remove_packages(dist.name()); }
+                    for dist in &changelog.installed {
+                        sp.remove_packages(dist.name());
+                        if let Some(version) = dist.version() {
+                            // Construct directly from known data — no disk I/O needed.
+                            // try_from_path reads cache_info + build_info from dist-info
+                            // on disk which costs 5-6ms. For registry installs those
+                            // fields are None/default and we already know name+version+path.
+                            let dist_info_name = format!(
+                                "{}-{}.dist-info",
+                                dist.name().as_dist_info_name(),
+                                version
+                            );
+                            let dist_info_path = sp.interpreter().purelib().join(&dist_info_name);
+                            let installed = InstalledDist::from(InstalledDistKind::Registry(
+                                InstalledRegistryDist {
+                                    name: dist.name().clone(),
+                                    version: version.clone(),
+                                    path: dist_info_path.into_boxed_path(),
+                                    cache_info: None,
+                                    build_info: None,
+                                },
+                            ));
+                            sp.add_dist(installed);
+                        }
+                    }
+                }
+            }
+            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-SYNC] Zero-disk cache update: {:.3?}", _sync_start.elapsed()); }
+            let _t_cl_lock = std::time::Instant::now();
+            if let Ok(mut g) = crate::INSTALL_CHANGELOG.lock() { *g = Some(changelog); }
+            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-changelog-lock: {:.3?}", _t_cl_lock.elapsed()); }
+            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-changelog-write: {:.2}ms (since install complete: {:.2}ms)", start.elapsed().as_secs_f64()*1000.0, _t_after_install.elapsed().as_secs_f64()*1000.0); }
+            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-install-overhead: {:.2}ms", _post_install_start.elapsed().as_secs_f64()*1000.0); }
+        }
         Err(err) => {
             return diagnostics::OperationDiagnostic::native_tls(client_builder.is_native_tls())
                 .report(err)
@@ -679,12 +758,21 @@ pub async fn pip_install(
     }
 
     // Notify the user of any resolution diagnostics.
+    let _t_diag = std::time::Instant::now();
     operations::diagnose_resolution(resolution.diagnostics(), printer)?;
-
+    if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-diagnose-resolution: {:.2}ms", _t_diag.elapsed().as_secs_f64()*1000.0); }
     // Notify the user of any environment diagnostics.
     if strict && !dry_run.enabled() {
         operations::diagnose_environment(&resolution, &environment, &marker_env, &tags, printer)?;
     }
 
+    // Drop expensive locals before implicit stack unwind.
+    drop(build_dispatch);
+    drop(client);
+    drop(resolution);
+    drop(state);
+    drop(environment);
+    if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-explicit-drop: {:.2}ms", _t_diag.elapsed().as_secs_f64()*1000.0); }
+    if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] pre-return: {:.2}ms", _t_diag.elapsed().as_secs_f64()*1000.0); }
     Ok(ExitStatus::Success)
 }

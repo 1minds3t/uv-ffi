@@ -16,7 +16,6 @@ categories = ["development-tools"]
 # Used under the MIT License. See LICENSE-MIT in this repository.
 
 [lib]
-name = "uv_ffi"
 crate-type = ["cdylib"]
 
 [dependencies]
@@ -33,8 +32,18 @@ uv-requirements  = { path = "../uv-requirements" }
 uv-resolver      = { path = "../uv-resolver" }
 uv-workspace     = { path = "../uv-workspace" }
 uv-python        = { path = "../uv-python" }
-uv-normalize     = { path = "../uv-normalize" }
+uv-normalize          = { path = "../uv-normalize" }
+uv-distribution-types = { path = "../uv-distribution-types" }
+uv-pep440             = { path = "../uv-pep440" }
 uv-settings      = { path = "../uv-settings" }
 uv-preview       = { path = "../uv-preview" }
 libc         = "0.2"
 os_pipe      = "1"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+clap = { version = "4.5.17", features = ["derive"] }
+uv-fs = { path = "../uv-fs" }
+uv-install-wheel = { path = "../uv-install-wheel" }
+anyhow = "1"
+dirs = "5"
+uv-platform-tags = { path = "../uv-platform-tags" }

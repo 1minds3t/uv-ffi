@@ -314,6 +314,7 @@ impl CompatArgs for VenvCompatArgs {
 ///
 /// These represent a subset of the `pip install` interface that uv supports by default.
 #[derive(Args)]
+#[derive(Default)]
 pub struct PipInstallCompatArgs {
     #[clap(long, hide = true)]
     disable_pip_version_check: bool,

@@ -12,7 +12,7 @@ pub(crate) mod install;
 pub(crate) mod latest;
 pub(crate) mod list;
 pub(crate) mod loggers;
-pub(crate) mod operations;
+pub mod operations;
 pub(crate) mod show;
 pub(crate) mod sync;
 pub(crate) mod tree;

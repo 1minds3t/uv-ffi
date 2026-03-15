@@ -84,7 +84,7 @@ mod cache_prune;
 mod cache_size;
 mod diagnostics;
 mod help;
-pub(crate) mod pip;
+pub mod pip;
 mod project;
 mod publish;
 mod python;

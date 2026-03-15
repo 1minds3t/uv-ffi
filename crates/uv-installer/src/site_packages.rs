@@ -175,6 +175,14 @@ impl SitePackages {
             .collect()
     }
 
+    /// Add a distribution to the in-memory index (does not write to disk).
+    pub fn add_dist(&mut self, dist: InstalledDist) {
+        let idx = self.distributions.len();
+        let name = dist.name().clone();
+        self.distributions.push(Some(dist));
+        self.by_name.entry(name).or_default().push(idx);
+    }
+
     /// Returns the distributions installed from the given URL, if any.
     pub fn get_urls(&self, url: &DisplaySafeUrl) -> Vec<&InstalledDist> {
         let Some(indexes) = self.by_url.get(url) else {
