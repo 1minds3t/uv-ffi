@@ -320,98 +320,74 @@ See [changelogs/0.1.x](./changelogs/0.1.x.md)
 
 ## [0.10.8.post1] — 2026-03-15
 
-The Persistent Engine
+Persistent Engine
 
-This release turns `uv-ffi` into a **high-performance, persistent execution engine** for `uv`'s package resolver and installer — designed for long-running processes, daemons, notebooks, and interactive tools.
+This release transforms uv-ffi into a high-performance persistent execution engine for uv's package resolver and installer. Designed for long-running processes, daemons, notebooks, and interactive tools.
 
-By keeping a Tokio runtime, HTTP connection pool, and in-memory site-packages cache warm across calls, it eliminates almost all per-call overhead, delivering speeds limited only by filesystem I/O.
+## Performance (warm cache, Linux NVMe, Python 3.11)
 
-- **Real version swap** (uninstall + reinstall different version): **~5.4–6.5 ms**
-  → ~2.5–3× faster than stock `uv pip install` (~17–20 ms wall)
-- **No-op / satisfied check**: **~0.4–2 ms**
-  → ~6–8× faster than stock `uv pip install` (~11–12 ms wall)
-- **Cache delta patch** (after external change): **~16–35 µs**
-  → ~300,000× faster than full disk rescan (~8–10 s)
+| Operation | uv CLI | uv-ffi | Speedup |
+|:--|--:|--:|--:|
+| No-op / satisfied check | ~11–12ms | ~0.4–2ms | ~6–8× |
+| Real swap (install different version) | ~17–20ms | ~5.4–6.5ms | ~2.5–3× |
+| Site-packages delta patch | ~2.5ms (full rescan) | ~25µs | ~100× |
 
-This release **optimizes only `pip install`** on the ultra-fast path.
+The ~5–6ms floor is the hardware limit for VFS symlink create/unlink on NVMe. All software overhead above that floor is eliminated.
 
-**Fast-path flags supported:**
-- `--python` (target interpreter)
-- `--index-url` / `--extra-index-url`
-- `--link-mode symlink` (default for omnipkg)
+## What's new
 
-**Fallback to slower clap path (~15–20 ms):**
-- `uv pip uninstall`
-- `uv run`, `uv sync`, `uv tool`, etc.
-- Any unsupported `pip install` flag
+**Persistent `UvEngine` singleton**
+Previously uv-ffi paid the full uv startup cost on every call — interpreter discovery, platform tagging, HTTP pool init, TLS setup, logging init. Now this happens once at import time and is held in a `OnceLock`. Every subsequent call skips directly to resolution.
 
-**Important:**
-The ~5–6 ms floor on real swaps is the **hardware limit** for VFS symlink create/unlink. `uv-ffi` removes all software overhead above that floor.
+**Zero-clap fast path**
+Common `pip install` commands now bypass clap argument parsing entirely. Internal Rust structs are constructed directly, saving ~2ms per call.
 
-**Critical limitation:**
-`uv-ffi` achieves this speed by **trusting its in-memory cache forever**.
-If an external tool (`uv`, `pip`, `conda`) modifies the environment without notifying `uv-ffi`, the next call may return a silent false no-op (`rc=0`, `inst=[]`, `rem=[]`) because the cache believes the target state is already satisfied.
+**Persistent `RegistryClient`**
+The HTTP client lives for the lifetime of the engine — eliminating ~1–2ms socket/TLS teardown per call.
 
-**Verified behavior:**
+**Delta cache patching**
+`patch_site_packages_cache(installed, removed)` updates the in-memory site-packages map surgically in ~25µs — ~100× faster than uv's own ~2.5ms full rescan. Use this with an FS watcher to maintain coherency after external changes at near-zero cost.
+
+**Daemon-safe internals**
+Tokio runtime, logging, and uv globals are now idempotent. No re-init panics or resource leaks in long-running host processes.
+
+**Full dist-info compatibility**
+uv-ffi installs now write complete dist-info including `RECORD`, `INSTALLER`, and `REQUESTED` — verified compatible with `uv pip uninstall` and standard Python toolchain operations.
+
+## Cache coherency — important
+
+uv-ffi trusts its in-memory cache completely. If an external tool modifies the environment without notifying uv-ffi, the next call may silently return rc=0 with no action (false no-op).
+
+Verified behavior with external interference:
 ```
-[1] uv-ffi swap → rc=0, inst=[('rich','14.3.3')], rem=[('rich','14.3.2')]
-[2] external `uv pip install rich==14.3.2` (disk now=14.3.2, cache still thinks 14.3.3)
-[3] uv-ffi ask for rich==14.3.3 → rc=0, inst=[], rem=[] (silent no-op)
-[4] uv-ffi ask for rich==14.3.2 → rc=0, inst=[('rich','14.3.2')], rem=[('rich','14.3.3')] (rescan + swap)
-```
-
-**Solutions for cache coherency:**
-- **Best:** Use `patch_site_packages_cache(installed, removed)` — ~25 µs delta update (omnipkg's FS watcher does this automatically)
-- **Simple:** Call `invalidate_site_packages_cache()` before any call where external change is possible — ~2.5 ms forced rescan
-- **Automatic:** Use omnipkg — its daemon + watcher maintains perfect coherence with zero manual calls
-
-If your process is the **only writer**, no coherency steps are needed — you get full speed with no caveats.
-
-1. **UvEngine — persistent session**
-   Process-local singleton (`OnceCell`) reuses Tokio runtime, `RegistryClient` (HTTP pool), and `SITE_PACKAGES_CACHE` forever.
-
-2. **Direct internal calls**
-   Bypasses `uv::run()` and clap. Calls `pip_install` internals directly.
-
-3. **Zero clap on install path**
-   Custom lightweight parser for common flags — clap only on fallback.
-
-4. **Persistent RegistryClient**
-   HTTP client lives forever — no ~1–2 ms socket/TLS teardown per call.
-
-5. **Surgical cache patching**
-   `patch_site_packages_cache()` updates RAM cache in ~25 µs — no disk rescan needed after external changes.
-
-6. **Daemon-safe internals**
-   Patched globals, Tokio, and logging to be idempotent — no re-init panics or leaks.
-
-```python
-from omnipkg._vendor.uv_ffi import run, invalidate_site_packages_cache
-
-run("pip install rich==14.3.2 --link-mode symlink --cache-dir ~/.cache/uv")
-
-run("pip install rich==14.3.3 --link-mode symlink --cache-dir ~/.cache/uv")  # ~5–7 ms
-run("pip install rich==14.3.2 --link-mode symlink --cache-dir ~/.cache/uv")  # ~5–7 ms
-
-invalidate_site_packages_cache()
-run("pip install rich==14.3.3 --link-mode symlink --cache-dir ~/.cache/uv")  # ~8 ms (includes ~2.5 ms rescan)
+[1] uv-ffi swap:                   6.5ms   ✓ inst=[('rich','14.3.3')]
+[2] external uv pip install:      18.7ms   disk changed behind our back
+[3] uv-ffi (cache stale):          0.5ms   ✗ silent no-op — wrong answer
+[4] uv-ffi (different target):    11.4ms   ✓ rescan detected mismatch, corrected
 ```
 
-- Daemon / background service authors needing in-process package management
-- Notebook / REPL users wanting instant dependency swaps
+**Solutions:**
+- **~25µs** — `patch_site_packages_cache(installed, removed)` via FS watcher (omnipkg's approach)
+- **~2.5ms** — `invalidate_site_packages_cache()` forced rescan before each call
+- **Nothing needed** — if your process is the only writer
+
+## Scope
+
+This release optimizes `pip install` on the fast path. Commands like `uv pip uninstall`, `uv run`, `uv sync` fall back to the standard clap path (~15–20ms). Bringing these into the zero-overhead path is the next focus.
+
+## Who this is for
+
+- Daemon and background service authors who need in-process package management
+- Notebook and REPL users who want instant dependency swaps
 - Tool builders who want uv's resolver speed without CLI overhead
-- Anyone tired of 10–20 ms spawn tax on repeated operations
 
-This engine powers **omnipkg v3.0**, where the daemon adds rollback bubbles, multi-version zero-copy interop, persistent GPU models, and real-time FS coherence via the watcher.
-Next focus: bring `uv run` and `uv pip uninstall` into the zero-overhead fast path.
+This engine powers omnipkg's daemon, where sub-10ms environment swaps and real-time FS coherence are table stakes.
 
-Install now:
+---
+
 `pip install uv-ffi==0.10.8.post1`
 
-Full source & benchmarks:
-https://github.com/1minds3t/omnipkg/tree/main/crates/uv-ffi
-
-Thank you to the `uv` team for the incredible foundation.
+Thank you to the uv team for the foundation this is built on.
 
 ---
 
@@ -429,14 +405,15 @@ Thank you to the `uv` team for the incredible foundation.
 - UPDATE: crates/uv/src/logging.rs (19 lines changed)
 
 **📚 Documentation:**
-- crates/uv-ffi/README.md (154 lines)
+- crates/uv-ffi/README.md (152 lines)
 
 **⚙️ Configuration:**
-- crates/uv-ffi/Cargo.toml (18 lines)
+- crates/uv-ffi/Cargo.toml (16 lines)
 - crates/uv-ffi/pyproject.toml (24 lines)
 - pyproject.toml
 
 **Additional Changes:**
+- docs: clarify cache coherency model and FS-scan speedup; fix Cargo version
 - feat: uv-ffi v0.10.8.post1 — persistent in-process engine & cache coherency
 - Bump toml to prepare for release.
 - perf(uv-ffi): persistent UvEngine runtime for daemon execution
@@ -444,7 +421,7 @@ Thank you to the `uv` team for the incredible foundation.
 **Updates:**
 - Update publish.yml
 
-_16 files changed, 1282 insertions(+), 220 deletions(-)_
+_17 files changed, 1407 insertions(+), 219 deletions(-)_
 
 ## [0.10.8] — 2026-03-11
 
