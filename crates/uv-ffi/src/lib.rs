@@ -180,7 +180,7 @@ async fn run_pip_install_direct(
         link_mode,
         false,                        // compile
         None,                         // hash_checking
-        false,                        // installer_metadata
+        true,                        // installer_metadata
         &ConfigSettings::default(),
         &PackageConfigSettings::default(),
         BuildIsolation::default(),

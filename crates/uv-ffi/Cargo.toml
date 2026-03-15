@@ -1,8 +1,8 @@
 [package]
 name = "uv-ffi"
-version = "0.10.8"
+version = "0.10.8.post1"
 edition = "2021"
-description = "In-process Python FFI bindings to uv's package resolver — internal dependency of omnipkg"
+description = "Persistent in-process execution engine for uv's package resolver — internal dependency of omnipkg"
 readme = "README.md"
 homepage = "https://github.com/1minds3t/omnipkg"
 repository = "https://github.com/1minds3t/omnipkg"
@@ -10,7 +10,6 @@ license = "MIT"
 license-file = "LICENSE-MIT"
 keywords = ["uv", "packaging", "ffi", "pip", "omnipkg"]
 categories = ["development-tools"]
-
 # ATTRIBUTION: This crate links against uv source code from
 # https://github.com/astral-sh/uv (c) Astral Software Inc.
 # Used under the MIT License. See LICENSE-MIT in this repository.

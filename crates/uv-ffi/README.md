@@ -1,32 +1,148 @@
 # uv-ffi
 
-> ⚠️ This package is not intended for direct use. It exists solely as a runtime dependency of [omnipkg](https://github.com/1minds3t/omnipkg).
+Persistent in-process execution engine for [uv](https://github.com/astral-sh/uv)'s package resolver and installer.
 
-In-process Python FFI bindings to uv's package resolver core. Rather than spawning a uv subprocess, omnipkg calls uv's install/resolve logic directly via FFI inside a pre-warmed daemon worker — eliminating binary startup cost entirely.
+While `uv` is designed as a world-class CLI tool, `uv-ffi` re-architects its core as a **resident engine**. By keeping a Tokio runtime, HTTP connection pools, and site-packages metadata warm in memory across calls, it achieves execution speeds limited only by filesystem I/O.
+
+Used internally by [omnipkg](https://github.com/1minds3t/omnipkg), but directly callable from any long-lived Python process.
+
+## Usage
+
+```python
+import sys
+sys.path.insert(0, '/path/to/omnipkg/src')
+from omnipkg._vendor.uv_ffi import run
+
+PY = '/path/to/your/python'
+BASE = f'pip install --python {PY} --link-mode symlink'
+
+# First call initializes the engine (~9ms, one-time cost)
+rc, installed, removed = run(f'{BASE} rich==14.3.2')
+
+# Subsequent calls use the warm engine (~5-6ms)
+rc, installed, removed = run(f'{BASE} rich==14.3.3')
+# -> inst=[('rich', '14.3.3')] rem=[('rich', '14.3.2')]
+```
+
+The key is keeping the import alive in a long-lived process. Each new Python subprocess pays ~70ms (interpreter startup + engine init). In a warm daemon worker, the same operation costs ~6ms.
 
 ## Performance
 
-| Method | wall time | user | sys |
-|--------|-----------|------|-----|
-| `uv pip install` (subprocess) | ~17-20ms | 0.006s | 0.013s |
-| `8pkg` via uv-ffi + daemon | ~12-16ms | 0.000s | 0.002s |
-| `8pkg` (preflight cache hit) | ~4-5ms | 0.000s | 0.000s |
+Measured wall-clock time on Linux (NVMe SSD, Python 3.11, pre-warmed uv cache).
 
-The gain comes entirely from eliminating binary spawn overhead (`user+sys`). uv's resolver itself is unchanged.
+### No-op (package already satisfied)
 
-## How it works
+| Method | Wall time | user | sys |
+|:--|--:|--:|--:|
+| `uv pip install` (subprocess) | ~11–12ms | 0.007s | 0.006s |
+| `uv-ffi` in-process (warm engine) | **~0.4–2ms** | 0.000s | 0.000s |
+| **Speedup** | **~6–8×** | | |
 
-- uv's private crates are linked directly (not via subprocess)
-- uv's install function is called in-process, bypassing the CLI entrypoint
-- omnipkg's daemon pre-loads the FFI module once at startup
-- Environment and site-packages state is cached across calls
-- Falls back to pip if the FFI call fails
+### Real swap (uninstall + reinstall different version)
+
+| Method | Wall time | user | sys |
+|:--|--:|--:|--:|
+| `uv pip install` (subprocess) | ~17–20ms | 0.010s | 0.013s |
+| `uv-ffi` in-process (warm engine) | **~5.4–6.5ms** | 0.000s | 0.002s |
+| **Speedup** | **~2.5–3×** | | |
+
+### After external tool modifies environment (cache stale)
+
+| Method | Wall time | Result |
+|:--|--:|:--|
+| uv-ffi, target already satisfied per cache | ~0.4ms | ⚠️ silent no-op (see below) |
+| uv-ffi, target differs from cache | ~9–14ms | ✓ rescan + real swap |
+
+### Cache invalidation
+
+| Method | Latency |
+|:--|--:|
+| Full site-packages disk rescan (`invalidate_site_packages_cache()`) | ~2.5ms |
+| Delta patch (`patch_site_packages_cache(installed, removed)`) | **~25µs** |
+
+The ~5–6ms floor on a real swap is the hardware limit — VFS symlink create/unlink on NVMe. uv-ffi eliminates all software overhead above that floor.
+
+**Important:** calling uv-ffi via a new subprocess each time (~73ms avg) is slower than calling `uv` directly (~19ms). The gains only materialize when the engine stays warm across multiple calls in the same process — a daemon, notebook kernel, API server, or test runner.
+
+## Cache coherency
+
+uv-ffi holds site-packages state in RAM and trusts it completely. If an external tool (`uv`, `pip`, `conda`) modifies the environment without notifying uv-ffi, the next call may return `rc=0, inst=[], rem=[]` — a silent false no-op — because the cache believes the target state is already satisfied.
+
+Verified behavior:
+```
+[1] uv-ffi normal swap:        6.51ms   inst=[('rich', '14.3.3')] rem=[('rich', '14.3.2')]
+[2] uv pip install rich==14.3.2:  18.65ms  (disk now=14.3.2, cache still thinks 14.3.3)
+[3] uv-ffi ask for rich==14.3.3:   0.46ms  inst=[] rem=[]  ← silent no-op, cache wrong
+[4] uv-ffi ask for rich==14.3.2:  11.35ms  inst=[('rich', '14.3.2')] ← rescan + swap
+```
+
+Step 3 returns rc=0 with no action because the cache says `14.3.3` is already installed — which matches what was asked for. The mismatch is only discovered in step 4 when something different is requested.
+
+**This is not a bug** — it is the fundamental tradeoff of a persistent cache. Callers who need coherency with external tools have two options:
+
+**Option A — FS watcher + delta patch** (omnipkg's approach)
+Watch site-packages for filesystem events and call `patch_site_packages_cache(installed, removed)` on each change. Cost: ~25µs per patch. Full coherency with no performance penalty on normal calls.
+
+**Option B — Force rescan**
+Call `invalidate_site_packages_cache()` before any call where external modification is possible. Cost: ~2.5ms per call — same as vanilla uv's no-op floor. Simple, no watcher needed, but loses the sub-millisecond no-op advantage.
+
+If your process is the **only thing modifying the environment**, neither is needed and you get full speed with no caveats.
+
+## Coexistence with vanilla uv
+
+uv-ffi installs are fully compatible with vanilla `uv` operations in the same environment. uv-ffi writes complete dist-info including `RECORD`, `INSTALLER`, and `REQUESTED` — so `uv pip uninstall`, `uv pip install`, and other standard toolchain operations work correctly on packages uv-ffi installed.
+
+Verified:
+- uv-ffi installs a package → `uv pip uninstall` removes it cleanly ✓
+- `uv pip install` modifies a package → uv-ffi subsequent call works correctly ✓
+- No warnings, no corrupted dist-info ✓
+
+Note: coherency caveats above still apply — coexistence means no corruption, not automatic cache synchronization.
+
+## Architecture
+
+```
+C dispatcher  →  Unix socket
+Python daemon →  dedicated uv worker per interpreter
+Rust FFI      →  persistent UvEngine (OnceLock)
+FS watcher    →  patch_site_packages_cache()
+```
+
+**Persistent `UvEngine` singleton**
+`uv` CLI pays ~10ms on every invocation for interpreter discovery, platform tagging, cache init, and TLS pool teardown. uv-ffi does this once at import time and holds the engine in a `OnceLock`. All subsequent calls skip directly to resolution.
+
+**Zero-clap fast path**
+Common `pip install` commands bypass clap argument parsing entirely — internal Rust structs are constructed directly, saving ~2ms per call.
+
+**Shared `SITE_PACKAGES_CACHE`**
+Site-packages metadata is kept in a shared cache across calls. A `FORCE_RESCAN` atomic flag lets the FS watcher trigger a targeted rescan only when an external write is detected.
+
+**Delta cache patching**
+`patch_site_packages_cache(installed, removed)` surgically updates the in-memory metadata map for a single package in ~25µs, avoiding full rescans after external `uv` or `pip` operations.
+
+**Idempotent initialization**
+Logging and Tokio initialization are guarded so the engine can be loaded safely in any process without double-init panics.
+
+## Benchmark methodology
+
+- In-process tests: 10-run alternating swap (`rich==14.3.2` ↔ `rich==14.3.3`) in a single warm Python session
+- Subprocess tests: 8 separate `subprocess.run` calls, new Python process each time
+- Interference test: uv subprocess between uv-ffi calls, 1s settle time
+- uv cache pre-warmed before all runs
+- Hardware: Linux, NVMe Gen4, Python 3.11.14
+
+## Version correspondence
+
+uv-ffi versions track the upstream uv release they are built against:
+
+| uv-ffi | uv upstream | Notes |
+|:--|:--|:--|
+| 0.10.8 | 0.10.8 | Initial release |
+| 0.10.8.post1 | 0.10.8 | Persistent UvEngine, delta cache patching, verified uv coexistence |
 
 ## Attribution
 
-This crate uses uv source code from [astral-sh/uv](https://github.com/astral-sh/uv),
-copyright Astral Software Inc., used under the **MIT License**. See `NOTICE` for full attribution.
+This crate links against uv source code from [astral-sh/uv](https://github.com/astral-sh/uv),
+copyright Astral Software Inc., used under the MIT License. See NOTICE for full attribution.
 
-## Not affiliated with Astral
-
-This project is not affiliated with, endorsed by, or sponsored by Astral Software Inc.
+Not affiliated with, endorsed by, or sponsored by Astral Software Inc.
