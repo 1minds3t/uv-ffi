@@ -11,17 +11,21 @@ Used internally by [omnipkg](https://github.com/1minds3t/omnipkg), but directly 
 ```python
 import sys
 sys.path.insert(0, '/path/to/omnipkg/src')
-from omnipkg._vendor.uv_ffi import run
+from omnipkg._vendor.uv_ffi import run, invalidate_site_packages_cache
 
 PY = '/path/to/your/python'
 BASE = f'pip install --python {PY} --link-mode symlink'
 
-# First call initializes the engine (~9ms, one-time cost)
+# First call initializes the engine (~65-75ms, one-time cost)
 rc, installed, removed = run(f'{BASE} rich==14.3.2')
 
 # Subsequent calls use the warm engine (~5-6ms)
 rc, installed, removed = run(f'{BASE} rich==14.3.3')
 # -> inst=[('rich', '14.3.3')] rem=[('rich', '14.3.2')]
+
+# If an external tool modified the environment, force a rescan
+invalidate_site_packages_cache()
+rc, installed, removed = run(f'{BASE} rich==14.3.3')  # ~8ms (includes 2.5ms rescan)
 ```
 
 The key is keeping the import alive in a long-lived process. Each new Python subprocess pays ~70ms (interpreter startup + engine init). In a warm daemon worker, the same operation costs ~6ms.
@@ -46,19 +50,13 @@ Measured wall-clock time on Linux (NVMe SSD, Python 3.11, pre-warmed uv cache).
 | `uv-ffi` in-process (warm engine) | **~5.4–6.5ms** | 0.000s | 0.002s |
 | **Speedup** | **~2.5–3×** | | |
 
-### After external tool modifies environment (cache stale)
-
-| Method | Wall time | Result |
-|:--|--:|:--|
-| uv-ffi, target already satisfied per cache | ~0.4ms | ⚠️ silent no-op (see below) |
-| uv-ffi, target differs from cache | ~9–14ms | ✓ rescan + real swap |
-
 ### Cache invalidation
 
-| Method | Latency |
-|:--|--:|
-| Full site-packages disk rescan (`invalidate_site_packages_cache()`) | ~2.5ms |
-| Delta patch (`patch_site_packages_cache(installed, removed)`) | **~25µs** |
+| Method | Latency | Notes |
+|:--|--:|:--|
+| `uv` full site-packages rescan | ~2.5ms | paid on every CLI invocation |
+| `invalidate_site_packages_cache()` | ~2.5ms | forced rescan, same cost as uv |
+| `patch_site_packages_cache(installed, removed)` | **~25µs** | **~100× faster** than full rescan |
 
 The ~5–6ms floor on a real swap is the hardware limit — VFS symlink create/unlink on NVMe. uv-ffi eliminates all software overhead above that floor.
 
@@ -70,21 +68,21 @@ uv-ffi holds site-packages state in RAM and trusts it completely. If an external
 
 Verified behavior:
 ```
-[1] uv-ffi normal swap:        6.51ms   inst=[('rich', '14.3.3')] rem=[('rich', '14.3.2')]
-[2] uv pip install rich==14.3.2:  18.65ms  (disk now=14.3.2, cache still thinks 14.3.3)
-[3] uv-ffi ask for rich==14.3.3:   0.46ms  inst=[] rem=[]  ← silent no-op, cache wrong
-[4] uv-ffi ask for rich==14.3.2:  11.35ms  inst=[('rich', '14.3.2')] ← rescan + swap
+[1] uv-ffi swap:                   6.51ms  inst=[('rich', '14.3.3')] rem=[('rich', '14.3.2')]
+[2] uv pip install rich==14.3.2:  18.65ms  (disk=14.3.2, cache still thinks 14.3.3)
+[3] uv-ffi ask for rich==14.3.3:   0.46ms  inst=[] rem=[]  ← silent no-op, wrong answer
+[4] uv-ffi ask for rich==14.3.2:  11.35ms  inst=[('rich', '14.3.2')]  ← rescan + swap
 ```
 
-Step 3 returns rc=0 with no action because the cache says `14.3.3` is already installed — which matches what was asked for. The mismatch is only discovered in step 4 when something different is requested.
+Step 3 returns rc=0 with no action because the cache says `14.3.3` is already installed. The mismatch is only discovered in step 4 when something different is requested.
 
 **This is not a bug** — it is the fundamental tradeoff of a persistent cache. Callers who need coherency with external tools have two options:
 
 **Option A — FS watcher + delta patch** (omnipkg's approach)
-Watch site-packages for filesystem events and call `patch_site_packages_cache(installed, removed)` on each change. Cost: ~25µs per patch. Full coherency with no performance penalty on normal calls.
+Watch site-packages for filesystem events and call `patch_site_packages_cache(installed, removed)` on each change. Cost: ~25µs per patch — ~100× faster than a full rescan. Full coherency with no performance penalty on normal calls.
 
 **Option B — Force rescan**
-Call `invalidate_site_packages_cache()` before any call where external modification is possible. Cost: ~2.5ms per call — same as vanilla uv's no-op floor. Simple, no watcher needed, but loses the sub-millisecond no-op advantage.
+Call `invalidate_site_packages_cache()` before any call where external modification is possible. Cost: ~2.5ms — same as uv's own site-packages scan cost. Simple, no watcher needed, but loses the sub-millisecond no-op advantage.
 
 If your process is the **only thing modifying the environment**, neither is needed and you get full speed with no caveats.
 
@@ -118,7 +116,7 @@ Common `pip install` commands bypass clap argument parsing entirely — internal
 Site-packages metadata is kept in a shared cache across calls. A `FORCE_RESCAN` atomic flag lets the FS watcher trigger a targeted rescan only when an external write is detected.
 
 **Delta cache patching**
-`patch_site_packages_cache(installed, removed)` surgically updates the in-memory metadata map for a single package in ~25µs, avoiding full rescans after external `uv` or `pip` operations.
+`patch_site_packages_cache(installed, removed)` surgically updates the in-memory metadata map for a single package in ~25µs — ~100× faster than uv's own ~2.5ms site-packages rescan.
 
 **Idempotent initialization**
 Logging and Tokio initialization are guarded so the engine can be loaded safely in any process without double-init panics.

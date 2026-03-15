@@ -1,6 +1,6 @@
 [package]
 name = "uv-ffi"
-version = "0.10.8.post1"
+version = "0.10.8"
 edition = "2021"
 description = "Persistent in-process execution engine for uv's package resolver — internal dependency of omnipkg"
 readme = "README.md"
