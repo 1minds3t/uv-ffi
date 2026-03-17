@@ -323,6 +323,7 @@ fn try_parse_ffi_install(cmd: &str) -> Option<FfiInstallOpts> {
     Some(opts)
 }
 
+
 fn build_fast_cli(opts: FfiInstallOpts) -> uv_cli::Cli {
     use uv_cli::{
         TopLevelArgs, GlobalArgs,
@@ -383,7 +384,7 @@ fn run_uv(cmd: &str) -> (i32, Option<Changelog>) {
             prof!("post-run_uv (engine)", _t);
             return match result {
                 Ok(cl)  => (0, Some(cl)),
-                Err(_)  => (1, None),
+                Err(e)  => { eprintln!("[UV-FFI] error: {:?}", e); (1, None) },
             };
         }
     }
@@ -429,6 +430,20 @@ fn dist_entry(d: &ChangedDist) -> (String, String) {
         .map(|v: &uv_pep440::Version| v.to_string())
         .unwrap_or_default();
     (name, ver)
+}
+/// Return the current in-memory site-packages state as a [(name, version)] list.
+/// Returns an empty list if the cache has not been populated yet.
+#[pyo3::pyfunction]
+fn get_site_packages_cache() -> Vec<(String, String)> {
+    let Ok(guard) = uv::SITE_PACKAGES_CACHE.try_lock() else {
+        return vec![];
+    };
+    let Some(ref sp) = *guard else {
+        return vec![];
+    };
+    sp.iter()
+        .map(|d| (d.name().to_string(), d.version().to_string()))
+        .collect()
 }
 
 #[pyo3::pyfunction]
@@ -527,6 +542,7 @@ fn uv_ffi(_py: pyo3::Python, m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3
     m.add_function(pyo3::wrap_pyfunction!(run, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(invalidate_site_packages_cache, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(patch_site_packages_cache, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(get_site_packages_cache, m)?)?;
     Ok(())
 }
 
