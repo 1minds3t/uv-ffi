@@ -160,8 +160,6 @@ jobs:
             pypath: 'python'
           - python: "3.14"
             pypath: 'python'
-          - python: "3.15"
-            pypath: 'python'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
