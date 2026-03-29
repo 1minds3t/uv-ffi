@@ -152,12 +152,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - python: "3.8"
-            pypath: 'C:\Python38\python.exe'
-          - python: "3.9"
-            pypath: 'C:\Python39\python.exe'
-          - python: "3.10"
-            pypath: 'python'
           - python: "3.11"
             pypath: 'python'
           - python: "3.12"
@@ -165,6 +159,8 @@ jobs:
           - python: "3.13"
             pypath: 'python'
           - python: "3.14"
+            pypath: 'python'
+          - python: "3.15"
             pypath: 'python'
     steps:
       - uses: actions/checkout@v4
