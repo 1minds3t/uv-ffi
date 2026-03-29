@@ -41,7 +41,12 @@ fn get_engine(python_exe: &str) -> &'static UvEngine {
             .unwrap_or_else(|_| {
                 std::env::var("HOME")
                     .map(|h| std::path::PathBuf::from(h).join(".cache").join("uv"))
-                    .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/uv"))
+                    .unwrap_or_else(|_| {
+                std::env::var("USERPROFILE")
+                    .or_else(|_| std::env::var("LOCALAPPDATA"))
+                    .map(|p| std::path::PathBuf::from(p).join(".cache").join("uv"))
+                    .unwrap_or_else(|_| std::env::temp_dir().join("uv"))
+            })
             });
         let cache = Cache::from_path(cache_dir);
 
