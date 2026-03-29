@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8.post2] — 2026-03-28
+
+Windows temp dir hotfix — replace hardcoded /tmp/uv with platform-safe fallback
+
+## What's Fixed
+
+Windows CI runners don't set `HOME`, causing uv-ffi to fall through to the
+hardcoded `/tmp/uv` path which doesn't exist on Windows. This produced a
+panic at `lib.rs:49` on every FFI call:
+
+    UvEngine: interpreter query failed: Io(Custom { kind: NotFound,
+      error: PathError { path: "D:/tmp/uv\\.tmpXXXXXX" ... } })
+
+The cache directory resolution now checks in order:
+1. `UV_CACHE_DIR` env var (explicit override)
+2. `HOME` (Unix)
+3. `USERPROFILE` (Windows home)
+4. `LOCALAPPDATA` (Windows fallback)
+5. `std::env::temp_dir()` (guaranteed valid on all platforms)
+
+## Who is affected
+
+Anyone running uv-ffi on Windows — including GitHub Actions runners.
+All Unix platforms are unaffected.
+
+## Upgrade
+
+    pip install --upgrade uv-ffi
+
+---
+
+**📝 Code Changes:**
+- UPDATE: crates/uv-ffi/src/lib.rs (25 lines changed)
+
+_1 file changed, 23 insertions(+), 2 deletions(-)_
+
 ## [0.10.8.post1] — 2026-03-15
 
 Persistent Engine
