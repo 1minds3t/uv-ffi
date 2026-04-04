@@ -37,16 +37,20 @@ static ENGINE: OnceLock<UvEngine> = OnceLock::new();
 fn get_engine(python_exe: &str) -> &'static UvEngine {
     ENGINE.get_or_init(|| {
         let cache_dir = std::env::var("UV_CACHE_DIR")
-            .map(std::path::PathBuf::from)
+            .map(|s| std::path::PathBuf::from(s))
             .unwrap_or_else(|_| {
-                std::env::var("HOME")
-                    .map(|h| std::path::PathBuf::from(h).join(".cache").join("uv"))
-                    .unwrap_or_else(|_| {
-                std::env::var("USERPROFILE")
-                    .or_else(|_| std::env::var("LOCALAPPDATA"))
-                    .map(|p| std::path::PathBuf::from(p).join(".cache").join("uv"))
-                    .unwrap_or_else(|_| std::env::temp_dir().join("uv"))
-            })
+                #[cfg(target_os = "windows")]
+                {
+                    std::env::var("LOCALAPPDATA")
+                        .map(|p| std::path::PathBuf::from(p).join("uv").join("cache"))
+                        .unwrap_or_else(|_| std::env::temp_dir().join("uv_cache"))
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    std::env::var("HOME")
+                        .map(|h| std::path::PathBuf::from(h).join(".cache").join("uv"))
+                        .unwrap_or_else(|_| std::env::temp_dir().join("uv_cache"))
+                }
             });
         let cache = Cache::from_path(cache_dir);
 
