@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8.post3] — 2026-04-11
+
+Windows ARM64 support & cache path fix
+
+## What's Changed
+
+Fixed a Tokio runtime panic on Windows caused by incorrect uv cache directory
+resolution. The old code fell through to HOME\.cache\uv which doesn't exist on
+Windows, causing a PathError that hung the daemon UV worker.
+
+Now correctly resolves to %LOCALAPPDATA%\uv\cache on Windows.
+
+Added wheel builds for Windows ARM64 (Python 3.11–3.14) via windows-11-arm runner.
+
+- Linux: x86_64 + aarch64, Python 3.8–3.14
+- macOS: Intel + Apple Silicon, Python 3.8–3.14
+- Windows x64: Python 3.8–3.14
+- Windows ARM64: Python 3.11–3.14 (new)
+
+---
+
+**⚙️ Configuration:**
+- crates/uv-ffi/pyproject.toml (2 lines)
+
+**Updates:**
+- Update Python versions in build-wheels.yml
+
+_3 files changed, 45 insertions(+), 10 deletions(-)_
+
 ## [0.10.8.post2] — 2026-03-28
 
 Windows temp dir hotfix — replace hardcoded /tmp/uv with platform-safe fallback
