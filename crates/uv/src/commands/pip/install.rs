@@ -312,9 +312,15 @@ pub async fn pip_install(
 
     // Determine the set of installed packages.
     let _t_sp = std::time::Instant::now();
+    let is_bubble = crate::BUBBLE_INSTALL.load(std::sync::atomic::Ordering::SeqCst);
     let site_packages = {
         let force = crate::FORCE_RESCAN.load(std::sync::atomic::Ordering::SeqCst);
-        let cached = if !force {
+        // Bubble installs NEVER read from or write to SITE_PACKAGES_CACHE.
+        // The cache reflects main site-packages state only. A bubble install
+        // scans the bare interpreter env (no target dir packages yet), and
+        // writing that back would poison the cache — causing the next main-env
+        // install to think nothing is installed and short-circuit satisfies_spec.
+        let cached = if !is_bubble && !force {
             crate::SITE_PACKAGES_CACHE.lock().ok().and_then(|g| g.clone())
         } else {
             None
@@ -324,9 +330,11 @@ pub async fn pip_install(
             sp
         } else {
             let sp = SitePackages::from_environment(&environment)?;
-            if let Ok(mut g) = crate::SITE_PACKAGES_CACHE.lock() { *g = Some(sp.clone()); }
-            crate::FORCE_RESCAN.store(false, std::sync::atomic::Ordering::SeqCst);
-            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-site-packages-scan: {:.2}ms (fresh)", _t_sp.elapsed().as_secs_f64()*1000.0); }
+            if !is_bubble {
+                if let Ok(mut g) = crate::SITE_PACKAGES_CACHE.lock() { *g = Some(sp.clone()); }
+                crate::FORCE_RESCAN.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-site-packages-scan: {:.2}ms (fresh{})", _t_sp.elapsed().as_secs_f64()*1000.0, if is_bubble { "/bubble" } else { "" }); }
             sp
         }
     };
@@ -711,6 +719,7 @@ pub async fn pip_install(
             let _t_after_install = std::time::Instant::now();
             if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-install-write: done"); }
             let _sync_start = std::time::Instant::now();
+            if !crate::BUBBLE_INSTALL.load(std::sync::atomic::Ordering::SeqCst) {
             if let Ok(mut sp_cache) = crate::SITE_PACKAGES_CACHE.try_lock() {
                 if let Some(ref mut sp) = *sp_cache {
                     use uv_distribution_types::{Name, InstalledDist, InstalledDistKind, InstalledRegistryDist};
@@ -743,10 +752,16 @@ pub async fn pip_install(
                     }
                 }
             }
-            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-SYNC] Zero-disk cache update: {:.3?}", _sync_start.elapsed()); }
+            } // end !BUBBLE_INSTALL guard
+            if crate::BUBBLE_INSTALL.load(std::sync::atomic::Ordering::SeqCst) {
+                // Bubble install — drain changelog without writing to statics
+                drop(changelog);
+            } else {
+            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-SYNC] Zero-disk cache update: done"); }
             let _t_cl_lock = std::time::Instant::now();
             if let Ok(mut g) = crate::INSTALL_CHANGELOG.lock() { *g = Some(changelog); }
             if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-changelog-lock: {:.3?}", _t_cl_lock.elapsed()); }
+            } // end else !BUBBLE_INSTALL
             if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-changelog-write: {:.2}ms (since install complete: {:.2}ms)", start.elapsed().as_secs_f64()*1000.0, _t_after_install.elapsed().as_secs_f64()*1000.0); }
             if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-install-overhead: {:.2}ms", _post_install_start.elapsed().as_secs_f64()*1000.0); }
         }

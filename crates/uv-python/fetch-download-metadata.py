@@ -95,7 +95,7 @@ class Arch:
         return (self.family, self.variant or "") < (other.family, other.variant or "")
 
 
-type PlatformTripleKey = tuple[str, str, str]
+PlatformTripleKey = tuple[str, str, str]
 
 
 class PlatformTriple(NamedTuple):

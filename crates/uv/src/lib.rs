@@ -29,6 +29,8 @@ pub static FORCE_RESCAN: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(true);
 pub static FFI_PROFILE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+pub static BUBBLE_INSTALL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 pub static STATIC_CACHE: std::sync::Mutex<Option<uv_cache::Cache>> =
     std::sync::Mutex::new(None);
 pub static REGISTRY_CLIENT: std::sync::Mutex<Option<uv_client::RegistryClient>> =

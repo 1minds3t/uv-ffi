@@ -34,6 +34,12 @@ unsafe impl Sync for UvEngine {}
 
 static ENGINE: OnceLock<UvEngine> = OnceLock::new();
 
+// Pre-warmed empty PythonEnvironment for bubble/--target installs.
+// Shares the interpreter (platform, markers, python version) with ENGINE
+// but intentionally has no installed packages — so uv's resolver treats
+// the target dir as a clean slate and never cross-contaminates main env.
+static BUBBLE_ENVIRONMENT: OnceLock<uv_python::PythonEnvironment> = OnceLock::new();
+
 fn get_engine(python_exe: &str) -> &'static UvEngine {
     ENGINE.get_or_init(|| {
         let cache_dir = std::env::var("UV_CACHE_DIR")
@@ -69,10 +75,6 @@ fn get_engine(python_exe: &str) -> &'static UvEngine {
         let client = RegistryClientBuilder::new(base_client, cache.clone())
             .build();
 
-        // Pre-warm the PythonEnvironment cache so pip_install never searches
-        let env = uv_python::PythonEnvironment::from_interpreter(interpreter.clone());
-        if let Ok(mut g) = uv::PYTHON_ENVIRONMENT.lock() { *g = Some(env); }
-
         UvEngine {
             cache,
             interpreter,
@@ -89,6 +91,7 @@ async fn run_pip_install_direct(
     index_url:       Option<String>,
     extra_index_url: Option<String>,
     python_exe:      &str,
+    target_dir:      Option<String>,
 ) -> anyhow::Result<uv::commands::pip::operations::Changelog> {
     use uv_requirements::RequirementsSource;
     use uv_configuration::{
@@ -104,7 +107,7 @@ async fn run_pip_install_direct(
         DependencyMode, ExcludeNewer, PrereleaseMode, ResolutionMode,
     };
     use uv_install_wheel::LinkMode;
-    use uv_python::{PythonDownloads, PythonPreference};
+    use uv_python::{PythonDownloads, PythonPreference, Target};
     use uv_settings::PythonInstallMirrors;
     use uv::commands::pip::operations::Modifications;
     use uv_workspace::pyproject::ExtraBuildDependencies;
@@ -114,6 +117,25 @@ async fn run_pip_install_direct(
     use std::str::FromStr;
 
     let engine = get_engine(python_exe);
+
+    let target = target_dir.map(|p| Target::from(std::path::PathBuf::from(p)));
+
+    // Seed PYTHON_ENVIRONMENT based on install destination:
+    //   main env  → real site-packages (resolver sees what's installed, skips existing deps)
+    //   --target  → empty bubble env   (resolver sees nothing, installs full self-contained set)
+    // BUBBLE_ENVIRONMENT is constructed once and reused — interpreter/platform are warm,
+    // but no dist-info scan ever runs against it, so it always looks empty to the resolver.
+    if target.is_some() {
+        let bubble_env = BUBBLE_ENVIRONMENT.get_or_init(|| {
+            uv_python::PythonEnvironment::from_interpreter(engine.interpreter.clone())
+        });
+        if let Ok(mut g) = uv::PYTHON_ENVIRONMENT.lock() { *g = Some(bubble_env.clone()); }
+        uv::BUBBLE_INSTALL.store(true, std::sync::atomic::Ordering::SeqCst);
+    } else {
+        let env = uv_python::PythonEnvironment::from_interpreter(engine.interpreter.clone());
+        if let Ok(mut g) = uv::PYTHON_ENVIRONMENT.lock() { *g = Some(env); }
+        uv::BUBBLE_INSTALL.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
 
     let requirements: Vec<RequirementsSource> = packages.iter()
         .map(|p| RequirementsSource::from_package_argument(p).expect("invalid package spec"))
@@ -163,7 +185,7 @@ async fn run_pip_install_direct(
         .platform(engine.interpreter.platform());
 
     // Call pip_install directly — no uv::run(), no settings resolution, no CLI
-    let result = uv::commands::pip_install(
+    uv::commands::pip_install(
         &requirements,
         &[],                          // constraints
         &[],                          // overrides
@@ -207,7 +229,7 @@ async fn run_pip_install_direct(
         Some(engine.python_exe.to_string_lossy().into_owned()),
         false,                        // system
         false,                        // break_system_packages
-        None,                         // target
+        target,                       // target
         None,                         // prefix
         PythonPreference::default(),
         Concurrency::default(),
@@ -215,9 +237,18 @@ async fn run_pip_install_direct(
         DryRun::default(),
         Printer::Silent,
         Preview::default(),
-    ).await?;
+    ).await.and_then(|status| match status {
+        uv::commands::ExitStatus::Success => Ok(()),
+        uv::commands::ExitStatus::Failure => Err(anyhow::anyhow!("pip_install failed: resolution or install error")),
+        uv::commands::ExitStatus::Error => Err(anyhow::anyhow!("pip_install failed: internal uv error")),
+        uv::commands::ExitStatus::External(code) => Err(anyhow::anyhow!("pip_install failed: external process exited with code {}", code)),
+    })?;
 
-    // Extract changelog from static
+    // Reset flag so the next main-env install is never affected.
+    uv::BUBBLE_INSTALL.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    // Drain changelog — for bubble installs install.rs already dropped it,
+    // for main installs take it normally.
     let changelog = uv::INSTALL_CHANGELOG.lock().ok()
         .and_then(|mut g| g.take())
         .unwrap_or_default();
@@ -259,6 +290,7 @@ struct FfiInstallOpts {
     extra_index_url: Option<String>,
     link_mode:       Option<uv_install_wheel::LinkMode>,
     quiet:           bool,
+    target_dir:      Option<String>,
 }
 
 fn try_parse_ffi_install(cmd: &str) -> Option<FfiInstallOpts> {
@@ -273,6 +305,7 @@ fn try_parse_ffi_install(cmd: &str) -> Option<FfiInstallOpts> {
         extra_index_url: None,
         link_mode:       None,
         quiet:           false,
+        target_dir:      None,
     };
 
     let tokens: Vec<&str> = rest.split_whitespace().collect();
@@ -305,6 +338,11 @@ fn try_parse_ffi_install(cmd: &str) -> Option<FfiInstallOpts> {
             }
             "--reinstall" | "--force-reinstall" => {
                 opts.reinstall = true;
+                i += 1;
+            }
+            "--target" | "-t" => {
+                i += 1;
+                opts.target_dir = tokens.get(i).map(|s| s.to_string());
                 i += 1;
             }
             "--link-mode" => {
@@ -388,6 +426,7 @@ fn run_uv(cmd: &str) -> (i32, Option<Changelog>) {
                 opts.index_url,
                 opts.extra_index_url,
                 python,
+                opts.target_dir,
             ));
             prof!("post-block_on", _t_blockon);
             prof!("post-run_uv (engine)", _t);
