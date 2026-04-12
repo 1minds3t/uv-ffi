@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8.post4] — 2026-04-12
+
+enforce target isolation for bubble installs and prevent cache poisoning
+
+This release unlocks ultra-fast, in-process target installations by completely isolating the `uv` daemon's caching engine. Previously, `--target` installs (bubbles) would poison the main environment's in-memory state, forcing Omnipkg to fall back to slow subprocesses.
+
+**Core Changes:**
+* **FFI Target Support:** Added `--target` routing directly into the `FfiInstallOpts` and `run_pip_install_direct` fast path.
+* **Dual-State Environments:** Introduced `BUBBLE_ENVIRONMENT` (a `OnceLock` pre-warmed empty state) so the resolver treats target directories as a clean slate without cross-contaminating the main interpreter.
+* **Cache Protection:** Implemented the `BUBBLE_INSTALL` atomic flag. Target installs now completely bypass `SITE_PACKAGES_CACHE` reads/writes and safely drain the `INSTALL_CHANGELOG` without mutating global statics.
+* **Cleanup:** Removed deprecated `.bak` files and bumped TOML parser dependencies.
+
+**Impact:** Omnipkg can now generate isolated multiversion bubbles entirely in-memory using the Rust FFI, dropping bubble generation overhead to milliseconds while keeping the main environment completely safe.
+
+---
+
+**📝 Code Changes:**
+- UPDATE: crates/uv-ffi/src/lib.rs (59 lines changed)
+- UPDATE: crates/uv-python/fetch-download-metadata.py (2 lines changed)
+- UPDATE: crates/uv/src/commands/pip/install.rs (27 lines changed)
+- UPDATE: crates/uv/src/lib.rs (2 lines changed)
+
+**⚙️ Configuration:**
+- crates/uv-ffi/pyproject.toml (2 lines)
+
+**Additional Changes:**
+- chore: bump toml
+- fix: enforce target isolation for bubble installs and prevent cache poisoning
+
+_6 files changed, 74 insertions(+), 73 deletions(-)_
+
 ## [0.10.8.post3] — 2026-04-11
 
 Windows ARM64 support & cache path fix
