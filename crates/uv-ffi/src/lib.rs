@@ -58,6 +58,7 @@ fn get_engine(python_exe: &str) -> &'static UvEngine {
                         .unwrap_or_else(|_| std::env::temp_dir().join("uv_cache"))
                 }
             });
+        let _ = std::fs::create_dir_all(&cache_dir);
         let cache = Cache::from_path(cache_dir);
 
         let interpreter = Interpreter::query(python_exe, &cache)
