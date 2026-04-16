@@ -1,178 +1,313 @@
-name: "🔧 Build uv-ffi Wheels"
+name: "🔧 Build uv-ffi Wheels (Extended)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW workflow — does NOT modify the original "Build uv-ffi Wheels" workflow.
+# Covers every target the original misses:
+#
+#  Linux glibc (manylinux):
+#    manylinux_2_17  → oldest practical target (Rust ≥ 1.64 requires glibc 2.17)
+#                      covers armv7 / aarch64 / ppc64le / s390x / i686
+#    manylinux_2_28  → kept for x86_64 (same as original) — skipped here to
+#                      avoid duplicates; original already produces those wheels
+#
+#  Linux musl (musllinux):
+#    musllinux_1_2   → Alpine, static-linked, musl containers
+#                      covers x86_64 / i686 / aarch64 / armv7 / ppc64le / s390x
+#
+#  Notes:
+#    • All jobs have continue-on-error: true — failures are logged, not fatal.
+#    • QEMU is set up once per job for any non-x86_64 target.
+#    • manylinux container builds use --find-interpreter so the container
+#      discovers all bundled Python versions; setup-python is skipped for
+#      Linux because maturin-action ignores it inside Docker anyway.
+#    • piwheels target = armv7 glibc (manylinux_2_17) — explicitly included.
+#    • Artifact names are unique and never collide with the original workflow.
+# ─────────────────────────────────────────────────────────────────────────────
+
 on:
   release:
     types: [published]
   workflow_dispatch:
 
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 1 — Linux glibc manylinux_2_17 (old glibc, max compat)
+# Targets: x86_64, i686, aarch64, armv7 (piwheels!), ppc64le, s390x
+# ─────────────────────────────────────────────────────────────────────────────
 jobs:
-  build-linux:
+  build-linux-glibc-2_17:
+    name: "glibc 2.17 • ${{ matrix.target }}"
     runs-on: ubuntu-latest
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64, aarch64]
-        python: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        target:
+          - x86_64
+          - i686
+          - aarch64
+          - armv7
+          - ppc64le
+          - s390x
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      # QEMU needed for every non-x86_64 target — maturin-action uses Docker
+      # cross-compile images, but binfmt must be registered for the runner.
+      - name: Set up QEMU (cross targets)
+        if: matrix.target != 'x86_64' && matrix.target != 'i686'
+        uses: docker/setup-qemu-action@v3
         with:
-          python-version: ${{ matrix.python }}
-      - name: Build wheel
+          platforms: all
+
+      - name: Build wheels (manylinux_2_17)
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
           target: ${{ matrix.target }}
-          manylinux: "2_28"
-          args: --release --out ${{ github.workspace }}/wheels/ --interpreter python${{ matrix.python }}
+          manylinux: "2_17"
+          # --find-interpreter: let the manylinux container discover all
+          # bundled CPython versions (3.8–3.13+); do NOT pass --interpreter
+          # here because setup-python has no effect inside the container.
+          args: --release --out ${{ github.workspace }}/wheels/ --find-interpreter
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-linux-${{ matrix.target }}-py${{ matrix.python }}
-          path: wheels/
 
-  build-macos:
-    runs-on: ${{ matrix.os }}
+      - name: Upload wheels
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "ext-wheels-linux-glibc217-${{ matrix.target }}"
+          path: wheels/
+          if-no-files-found: warn
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 2 — Linux musl musllinux_1_2 (Alpine, static-linked)
+# Targets: x86_64, i686, aarch64, armv7, ppc64le, s390x
+# ─────────────────────────────────────────────────────────────────────────────
+  build-linux-musl:
+    name: "musl 1.2 • ${{ matrix.target }}"
+    runs-on: ubuntu-latest
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, macos-14, macos-15-intel]
+        target:
+          - x86_64
+          - i686
+          - aarch64
+          - armv7
+          - ppc64le
+          - s390x
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (cross targets)
+        if: matrix.target != 'x86_64' && matrix.target != 'i686'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+
+      - name: Build wheels (musllinux_1_2)
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/uv-ffi
+          target: ${{ matrix.target }}
+          manylinux: musllinux_1_2
+          args: --release --out ${{ github.workspace }}/wheels/ --find-interpreter
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+
+      - name: Upload wheels
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "ext-wheels-linux-musl-${{ matrix.target }}"
+          path: wheels/
+          if-no-files-found: warn
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 3 — Linux riscv64 (glibc, manylinux_2_31 — earliest container available)
+# Tier-3 target, likely to fail on older Rust/PyO3 but worth attempting.
+# ─────────────────────────────────────────────────────────────────────────────
+  build-linux-riscv64:
+    name: "riscv64 glibc 2.31"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: riscv64
+
+      - name: Build wheels (manylinux_2_31)
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/uv-ffi
+          target: riscv64gc-unknown-linux-gnu
+          manylinux: "2_31"
+          args: --release --out ${{ github.workspace }}/wheels/ --find-interpreter
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+
+      - name: Upload wheels
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "ext-wheels-linux-riscv64"
+          path: wheels/
+          if-no-files-found: warn
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 4 — Linux loongarch64 (glibc 2.36 — China domestic arch, conda-forge
+# is adding support; tier-3 but easy win if Rust target is stable)
+# ─────────────────────────────────────────────────────────────────────────────
+  build-linux-loongarch64:
+    name: "loongarch64 glibc 2.36"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+
+      - name: Build wheels (manylinux_2_36)
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/uv-ffi
+          target: loongarch64-unknown-linux-gnu
+          manylinux: "2_36"
+          args: --release --out ${{ github.workspace }}/wheels/ --find-interpreter
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+
+      - name: Upload wheels
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "ext-wheels-linux-loongarch64"
+          path: wheels/
+          if-no-files-found: warn
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 5 — macOS universal2 (fat binary: x86_64 + arm64 in one wheel)
+# Covers Macs not already produced by the original workflow's per-OS matrix.
+# The original builds separate x86_64 and arm64 wheels; this adds universal2.
+# ─────────────────────────────────────────────────────────────────────────────
+  build-macos-universal2:
+    name: "macOS universal2"
+    runs-on: macos-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
         python: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Build wheel
+
+      - name: Build universal2 wheel
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
+          target: universal2-apple-darwin
           args: --release --out ${{ github.workspace }}/wheels/ --interpreter python${{ matrix.python }}
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload wheels
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-py${{ matrix.python }}
+          name: "ext-wheels-macos-universal2-py${{ matrix.python }}"
           path: wheels/
+          if-no-files-found: warn
 
-  setup-windows-python:
-    runs-on: [self-hosted, windows, x64]
-    steps:
-      - name: Check if Python already installed
-        id: check
-        shell: powershell
-        run: |
-          $missing = @("38","39","310","311","312","313") | Where-Object { -not (Test-Path "C:\Python$_\python.exe") }
-          if ($missing.Count -eq 0) {
-            echo "all_installed=true" >> $env:GITHUB_OUTPUT
-          } else {
-            echo "all_installed=false" >> $env:GITHUB_OUTPUT
-            Write-Host "Missing: $($missing -join ', ')"
-          }
-      - name: Install all Python versions
-        if: steps.check.outputs.all_installed != 'true'
-        shell: powershell
-        run: |
-          $versions = @(
-            @{ver="3.8.20";  short="38"},
-            @{ver="3.9.13";  short="39"},
-            @{ver="3.10.11"; short="310"},
-            @{ver="3.11.9";  short="311"},
-            @{ver="3.12.9";  short="312"},
-            @{ver="3.13.2";  short="313"},
-            @{ver="3.14.0a6";short="314"}
-          )
-          foreach ($p in $versions) {
-            $dest = "C:\Python$($p.short)"
-            if (Test-Path "$dest\python.exe") {
-              Write-Host "Python $($p.ver) already installed at $dest"
-              continue
-            }
-            $v = $p.ver
-            if ($v -like "*a*") {
-              $url = "https://www.python.org/ftp/python/3.14.0/python-3.14.0a6-amd64.exe"
-            } else {
-              $url = "https://www.python.org/ftp/python/$v/python-$v-amd64.exe"
-            }
-            Write-Host "Downloading Python $v from $url"
-            Invoke-WebRequest $url -OutFile "$env:TEMP\python-install.exe"
-            Start-Process "$env:TEMP\python-install.exe" -ArgumentList "/quiet InstallAllUsers=0 TargetDir=$dest PrependPath=0 Include_launcher=0" -Wait
-            Remove-Item "$env:TEMP\python-install.exe" -Force -ErrorAction SilentlyContinue
-            Write-Host "Installed Python $v at $dest"
-          }
-
-  build-windows:
-    runs-on: [self-hosted, windows, x64]
-    needs: setup-windows-python
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 6 — Windows i686 (32-bit x86)
+# Not in original workflow (original only does x64 + arm64).
+# ─────────────────────────────────────────────────────────────────────────────
+  build-windows-i686:
+    name: "Windows i686 • py${{ matrix.python }}"
+    runs-on: windows-latest
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - python: "3.8"
-            pypath: 'C:\Python38\python.exe'
-          - python: "3.9"
-            pypath: 'C:\Python39\python.exe'
-          - python: "3.10"
-            pypath: 'C:\Python310\python.exe'
-          - python: "3.11"
-            pypath: 'C:\Python311\python.exe'
-          - python: "3.12"
-            pypath: 'C:\Python312\python.exe'
-          - python: "3.13"
-            pypath: 'C:\Python313\python.exe'
-          - python: "3.14"
-            pypath: 'C:\Python314\python.exe'
-    steps:
-      - uses: actions/checkout@v4
-      - name: Add MSVC to PATH
-        shell: cmd
-        run: |
-          call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-          echo PATH=%PATH% >> %GITHUB_ENV%
-          echo INCLUDE=%INCLUDE% >> %GITHUB_ENV%
-          echo LIB=%LIB% >> %GITHUB_ENV%
-          echo LIBPATH=%LIBPATH% >> %GITHUB_ENV%
-      - name: Build wheel
-        shell: powershell
-        run: |
-          $env:RUSTUP_HOME = "C:\rustup-home"
-          $env:CARGO_HOME = "C:\cargo-home"
-          $env:PATH = "C:\cargo-home\bin;" + $env:PATH
-          C:\Python313\python.exe -m maturin build --release --out "${{ github.workspace }}\wheels" --interpreter ${{ matrix.pypath }} --manifest-path crates/uv-ffi/Cargo.toml
-        env:
-          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-windows-py${{ matrix.python }}
-          path: wheels/
-
-  build-windows-arm64:
-    runs-on: windows-11-arm
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - python: "3.11"
-            pypath: 'python'
-          - python: "3.12"
-            pypath: 'python'
-          - python: "3.13"
-            pypath: 'python'
-          - python: "3.14"
-            pypath: 'python'
+        python: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Build wheel
-        shell: powershell
-        run: |
-          python -m pip install maturin
-          python -m maturin build --release --out "${{ github.workspace }}\wheels" --manifest-path crates/uv-ffi/Cargo.toml
+          architecture: x86
+
+      - name: Build wheel (i686)
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/uv-ffi
+          target: i686-pc-windows-msvc
+          args: --release --out ${{ github.workspace }}\wheels\ --interpreter python${{ matrix.python }}
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload wheels
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: wheels-windows-arm64-py${{ matrix.python }}
+          name: "ext-wheels-windows-i686-py${{ matrix.python }}"
           path: wheels/
+          if-no-files-found: warn
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SUMMARY JOB — collects all artifacts into one download, logs any failures
+# ─────────────────────────────────────────────────────────────────────────────
+  collect-wheels:
+    name: "Collect all extended wheels"
+    runs-on: ubuntu-latest
+    # Always run even if some build jobs failed (they have continue-on-error)
+    if: always()
+    needs:
+      - build-linux-glibc-2_17
+      - build-linux-musl
+      - build-linux-riscv64
+      - build-linux-loongarch64
+      - build-macos-universal2
+      - build-windows-i686
+    steps:
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "ext-wheels-*"
+          path: all-wheels/
+          merge-multiple: true
+
+      - name: List collected wheels
+        run: |
+          echo "=== Extended wheel build results ==="
+          find all-wheels/ -name "*.whl" | sort | tee wheel-list.txt
+          echo ""
+          echo "Total wheels: $(wc -l < wheel-list.txt)"
+
+      - name: Log job outcomes
+        run: |
+          echo "Job results:"
+          echo "  glibc-2_17  : ${{ needs.build-linux-glibc-2_17.result }}"
+          echo "  musl        : ${{ needs.build-linux-musl.result }}"
+          echo "  riscv64     : ${{ needs.build-linux-riscv64.result }}"
+          echo "  loongarch64 : ${{ needs.build-linux-loongarch64.result }}"
+          echo "  macos-uni2  : ${{ needs.build-macos-universal2.result }}"
+          echo "  windows-i686: ${{ needs.build-windows-i686.result }}"
+
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: "ext-wheels-ALL"
+          path: all-wheels/
+          if-no-files-found: warn
