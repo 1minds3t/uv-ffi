@@ -70,8 +70,6 @@ jobs:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
           CFLAGS_aarch64_unknown_linux_gnu: "-march=armv8-a"
           CFLAGS_armv7_unknown_linux_gnueabihf: "-march=armv7-a"
-        env:
-          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
 
       - name: Upload wheels
         if: always()
