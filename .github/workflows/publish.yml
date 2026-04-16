@@ -28,7 +28,7 @@ jobs:
           sparse-checkout: .github/workflows/
           sparse-checkout-cone-mode: false
 
-      - name: Resolve tag and find build-wheels run
+      - name: Resolve tag and find both build runs
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
@@ -44,55 +44,52 @@ jobs:
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Resolved tag: $TAG"
 
-          echo "Searching for completed build-wheels run for tag $TAG..."
-          RUN_ID=$(gh api \
-            "repos/${{ github.repository }}/actions/workflows/build-wheels.yml/runs?per_page=20" \
-            --jq ".workflow_runs[] | select(.head_branch == \"$TAG\" or .display_title == \"$TAG\" or (.head_commit.message | test(\"$TAG\"))) | .id" \
-            2>/dev/null | head -1)
+          find_run() {
+            local WF=$1
+            local ID
+            ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?per_page=30" \
+              --jq ".workflow_runs[] | select(.head_branch == \"$TAG\" or .display_title == \"$TAG\" or (.head_commit.message | test(\"$TAG\"))) | .id" \
+              2>/dev/null | head -1)
+            if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+              ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?status=success&per_page=5" \
+                --jq '.workflow_runs[0].id' 2>/dev/null)
+              echo "  $WF: tag match not found, falling back to latest success: $ID" >&2
+            fi
+            echo "$ID"
+          }
 
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "  Tag match not found, trying most recent successful run..."
-            RUN_ID=$(gh api \
-              "repos/${{ github.repository }}/actions/workflows/build-wheels.yml/runs?status=success&per_page=5" \
-              --jq '.workflow_runs[0].id' 2>/dev/null)
-          fi
+          STD_ID=$(find_run "build-wheels.yml")
+          EXT_ID=$(find_run "build-wheels-extended.yml")
+          echo "std_run_id=$STD_ID" >> $GITHUB_OUTPUT
+          echo "ext_run_id=$EXT_ID" >> $GITHUB_OUTPUT
+          echo "Standard run: $STD_ID  |  Extended run: $EXT_ID"
 
-          echo "build_run_id=$RUN_ID" >> $GITHUB_OUTPUT
-          echo "Found build-wheels run: $RUN_ID"
-
-      - name: Wait for build-wheels to complete (release trigger only)
+      - name: Wait for both builds to complete
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RUN_ID="${{ steps.resolve.outputs.build_run_id }}"
-          echo "Polling build-wheels run $RUN_ID (no timeout)..."
-          INTERVAL=30
-          ELAPSED=0
-          while true; do
-            STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" \
-              --jq '.status' 2>/dev/null)
-            CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" \
-              --jq '.conclusion // ""' 2>/dev/null)
-            echo "  [${ELAPSED}s] status=$STATUS conclusion=$CONCLUSION"
-            if [ "$STATUS" = "completed" ]; then
-              if [ "$CONCLUSION" = "success" ]; then
-                ARTIFACT_COUNT=$(gh api \
-                  "repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts" \
-                  --jq '.total_count' 2>/dev/null)
-                echo "  Artifacts found: $ARTIFACT_COUNT"
-                if [ "$ARTIFACT_COUNT" -gt "0" ]; then
-                  echo "✅ Wheels ready! Total wait: ${ELAPSED}s"
-                  break
-                fi
-              else
-                echo "❌ build-wheels failed: $CONCLUSION"
-                exit 1
-              fi
+          wait_for_run() {
+            local ID=$1 NAME=$2
+            if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+              echo "⚠️  $NAME: no run found, skipping wait"
+              return 0
             fi
-            sleep $INTERVAL
-            ELAPSED=$((ELAPSED + INTERVAL))
-          done
+            echo "Polling $NAME (run $ID)..."
+            local ELAPSED=0
+            while true; do
+              STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.status' 2>/dev/null)
+              CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.conclusion // ""' 2>/dev/null)
+              echo "  [${ELAPSED}s] $NAME: status=$STATUS conclusion=$CONCLUSION"
+              if [ "$STATUS" = "completed" ]; then
+                [ "$CONCLUSION" = "success" ] && { echo "✅ $NAME done"; return 0; }
+                echo "❌ $NAME failed: $CONCLUSION"; exit 1
+              fi
+              sleep 30; ELAPSED=$((ELAPSED+30))
+            done
+          }
+          wait_for_run "${{ steps.resolve.outputs.std_run_id }}" "build-wheels"
+          wait_for_run "${{ steps.resolve.outputs.ext_run_id }}" "build-wheels-extended"
 
       - name: Verify artifacts exist (manual trigger)
         if: github.event_name == 'workflow_dispatch'
@@ -110,12 +107,22 @@ jobs:
           fi
           echo "✅ $ARTIFACT_COUNT artifacts ready to publish"
 
-      - name: Download wheels
+      - name: Download standard wheels
         uses: dawidd6/action-download-artifact@v3
         with:
           workflow: build-wheels.yml
-          run_id: ${{ steps.resolve.outputs.build_run_id }}
+          run_id: ${{ steps.resolve.outputs.std_run_id }}
           name: wheels-*
+          name_is_regexp: true
+          merge_multiple: true
+          path: dist/
+
+      - name: Download extended wheels
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: build-wheels-extended.yml
+          run_id: ${{ steps.resolve.outputs.ext_run_id }}
+          name: ext-wheels-*
           name_is_regexp: true
           merge_multiple: true
           path: dist/
@@ -136,6 +143,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          skip_existing: true   # <-- add this
 
       - name: Publish via API token (fallback)
         if: steps.oidc.outcome == 'failure'
