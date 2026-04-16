@@ -1,0 +1,178 @@
+name: "🔧 Build uv-ffi Wheels"
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+        python: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/uv-ffi
+          target: ${{ matrix.target }}
+          manylinux: "2_28"
+          args: --release --out ${{ github.workspace }}/wheels/ --interpreter python${{ matrix.python }}
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}-py${{ matrix.python }}
+          path: wheels/
+
+  build-macos:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-14, macos-15-intel]
+        python: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/uv-ffi
+          args: --release --out ${{ github.workspace }}/wheels/ --interpreter python${{ matrix.python }}
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-py${{ matrix.python }}
+          path: wheels/
+
+  setup-windows-python:
+    runs-on: [self-hosted, windows, x64]
+    steps:
+      - name: Check if Python already installed
+        id: check
+        shell: powershell
+        run: |
+          $missing = @("38","39","310","311","312","313") | Where-Object { -not (Test-Path "C:\Python$_\python.exe") }
+          if ($missing.Count -eq 0) {
+            echo "all_installed=true" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "all_installed=false" >> $env:GITHUB_OUTPUT
+            Write-Host "Missing: $($missing -join ', ')"
+          }
+      - name: Install all Python versions
+        if: steps.check.outputs.all_installed != 'true'
+        shell: powershell
+        run: |
+          $versions = @(
+            @{ver="3.8.20";  short="38"},
+            @{ver="3.9.13";  short="39"},
+            @{ver="3.10.11"; short="310"},
+            @{ver="3.11.9";  short="311"},
+            @{ver="3.12.9";  short="312"},
+            @{ver="3.13.2";  short="313"},
+            @{ver="3.14.0a6";short="314"}
+          )
+          foreach ($p in $versions) {
+            $dest = "C:\Python$($p.short)"
+            if (Test-Path "$dest\python.exe") {
+              Write-Host "Python $($p.ver) already installed at $dest"
+              continue
+            }
+            $v = $p.ver
+            if ($v -like "*a*") {
+              $url = "https://www.python.org/ftp/python/3.14.0/python-3.14.0a6-amd64.exe"
+            } else {
+              $url = "https://www.python.org/ftp/python/$v/python-$v-amd64.exe"
+            }
+            Write-Host "Downloading Python $v from $url"
+            Invoke-WebRequest $url -OutFile "$env:TEMP\python-install.exe"
+            Start-Process "$env:TEMP\python-install.exe" -ArgumentList "/quiet InstallAllUsers=0 TargetDir=$dest PrependPath=0 Include_launcher=0" -Wait
+            Remove-Item "$env:TEMP\python-install.exe" -Force -ErrorAction SilentlyContinue
+            Write-Host "Installed Python $v at $dest"
+          }
+
+  build-windows:
+    runs-on: [self-hosted, windows, x64]
+    needs: setup-windows-python
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.8"
+            pypath: 'C:\Python38\python.exe'
+          - python: "3.9"
+            pypath: 'C:\Python39\python.exe'
+          - python: "3.10"
+            pypath: 'C:\Python310\python.exe'
+          - python: "3.11"
+            pypath: 'C:\Python311\python.exe'
+          - python: "3.12"
+            pypath: 'C:\Python312\python.exe'
+          - python: "3.13"
+            pypath: 'C:\Python313\python.exe'
+          - python: "3.14"
+            pypath: 'C:\Python314\python.exe'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add MSVC to PATH
+        shell: cmd
+        run: |
+          call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+          echo PATH=%PATH% >> %GITHUB_ENV%
+          echo INCLUDE=%INCLUDE% >> %GITHUB_ENV%
+          echo LIB=%LIB% >> %GITHUB_ENV%
+          echo LIBPATH=%LIBPATH% >> %GITHUB_ENV%
+      - name: Build wheel
+        shell: powershell
+        run: |
+          $env:RUSTUP_HOME = "C:\rustup-home"
+          $env:CARGO_HOME = "C:\cargo-home"
+          $env:PATH = "C:\cargo-home\bin;" + $env:PATH
+          C:\Python313\python.exe -m maturin build --release --out "${{ github.workspace }}\wheels" --interpreter ${{ matrix.pypath }} --manifest-path crates/uv-ffi/Cargo.toml
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-py${{ matrix.python }}
+          path: wheels/
+
+  build-windows-arm64:
+    runs-on: windows-11-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.11"
+            pypath: 'python'
+          - python: "3.12"
+            pypath: 'python'
+          - python: "3.13"
+            pypath: 'python'
+          - python: "3.14"
+            pypath: 'python'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build wheel
+        shell: powershell
+        run: |
+          python -m pip install maturin
+          python -m maturin build --release --out "${{ github.workspace }}\wheels" --manifest-path crates/uv-ffi/Cargo.toml
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-arm64-py${{ matrix.python }}
+          path: wheels/
