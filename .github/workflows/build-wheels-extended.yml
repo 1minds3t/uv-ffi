@@ -47,7 +47,7 @@ jobs:
           - aarch64
           - armv7
           - ppc64le
-          - s390x
+          - s390x-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
 
@@ -96,7 +96,7 @@ jobs:
           - aarch64
           - armv7
           - ppc64le
-          - s390x
+          - s390x-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
 
