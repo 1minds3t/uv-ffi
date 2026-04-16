@@ -50,6 +50,9 @@ jobs:
           - s390x-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
 
       # QEMU needed for every non-x86_64 target — maturin-action uses Docker
       # cross-compile images, but binfmt must be registered for the runner.
