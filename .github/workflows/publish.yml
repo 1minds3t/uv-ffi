@@ -58,41 +58,38 @@ jobs:
           echo "Tag SHA: $TAG_SHA"
           
           find_or_trigger_run() {
-            local WF=$1
-            # Check for existing successful run matching this SHA
-            local ID
-            ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
-              --jq ".workflow_runs[] | select(.conclusion == \"success\" and .head_sha == \"$TAG_SHA\") | .id" \
+          local WF=$1
+          local ID
+          ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
+            --jq ".workflow_runs[] | select(.conclusion == \"success\") | .id" \
+            2>/dev/null | head -1)
+          if [ -n "$ID" ] && [ "$ID" != "null" ]; then
+            echo "  $WF → existing run $ID (branch $BRANCH)" >&2
+            echo "$ID"
+            return
+          fi
+        
+          echo "  $WF → no successful run on $BRANCH, triggering..." >&2
+          gh api "repos/${{ github.repository }}/actions/workflows/$WF/dispatches" \
+            -f ref="$BRANCH"
+        
+          local ELAPSED=0
+          while true; do
+            ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=5" \
+              --jq ".workflow_runs[] | select(.status != \"completed\" or .conclusion == \"success\") | .id" \
               2>/dev/null | head -1)
             if [ -n "$ID" ] && [ "$ID" != "null" ]; then
-              echo "  $WF → existing run $ID" >&2
-              echo "$ID"
-              return
-            fi
-          
-            # Trigger it
-            echo "  $WF → no run found for $TAG_SHA, triggering on $BRANCH..." >&2
-            gh api "repos/${{ github.repository }}/actions/workflows/$WF/dispatches" \
-              -f ref="$BRANCH" 2>/dev/null || true
-          
-            # Wait for it to appear and complete
-            local ELAPSED=0
-            while true; do
-              ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=10" \
-                --jq ".workflow_runs[] | select(.head_sha == \"$TAG_SHA\") | .id" \
-                2>/dev/null | head -1)
-              if [ -n "$ID" ] && [ "$ID" != "null" ]; then
-                STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.status' 2>/dev/null)
-                CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.conclusion // ""' 2>/dev/null)
-                echo "  [${ELAPSED}s] $WF run $ID: $STATUS / $CONCLUSION" >&2
-                if [ "$STATUS" = "completed" ]; then
-                  [ "$CONCLUSION" = "success" ] && { echo "$ID"; return; }
-                  echo "❌ $WF run failed: $CONCLUSION" >&2; exit 1
-                fi
+              STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.status')
+              CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.conclusion // ""')
+              echo "  [${ELAPSED}s] $WF $ID: $STATUS/$CONCLUSION" >&2
+              if [ "$STATUS" = "completed" ]; then
+                [ "$CONCLUSION" = "success" ] && { echo "$ID"; return; }
+                echo "❌ $WF failed: $CONCLUSION" >&2; exit 1
               fi
-              sleep 30; ELAPSED=$((ELAPSED+30))
-            done
-          }
+            fi
+            sleep 30; ELAPSED=$((ELAPSED+30))
+          done
+        }
           
           STD_ID=$(find_or_trigger_run "build-wheels.yml")
           EXT_ID=$(find_or_trigger_run "build-wheels-extended.yml")
