@@ -57,7 +57,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-latest, macos-14, macos-15-intel]
-        python:["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        python: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       
@@ -143,7 +143,7 @@ jobs:
           }
 
   build-windows:
-    runs-on:[self-hosted, windows, x64]
+    runs-on: [self-hosted, windows, x64]
     needs: setup-windows-python
     strategy:
       fail-fast: false
