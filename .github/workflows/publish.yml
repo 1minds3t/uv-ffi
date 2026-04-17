@@ -44,34 +44,39 @@ jobs:
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Resolved tag: $TAG"
-          
-          # ── Derive branch from tag ────────────────────────────────
-          BASE_VER=$(echo "$TAG" | grep -oP 'v\d+\.\d+\.\d+' | head -1)
-          BRANCH="omnipkg-ffi-${BASE_VER}"
-          echo "Derived branch: $BRANCH"
+
+          BRANCH="omnipkg-ffi-v0.10.8"
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
-          
-          # ── Find or trigger run ───────────────────────────────────
+
+          # ── Get commit SHA for this tag ───────────────────────────
+          OBJ_TYPE=$(gh api "repos/${{ github.repository }}/git/ref/tags/$TAG" --jq '.object.type')
+          TAG_SHA=$(gh api "repos/${{ github.repository }}/git/ref/tags/$TAG" --jq '.object.sha')
+          if [ "$OBJ_TYPE" = "tag" ]; then
+            TAG_SHA=$(gh api "repos/${{ github.repository }}/git/tags/$TAG_SHA" --jq '.object.sha')
+          fi
+          echo "Tag SHA: $TAG_SHA"
+
+          # ── Find or trigger run by SHA on ffi branch ─────────────
           find_or_trigger_run() {
             local WF=$1
             local ID
             ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
-              --jq ".workflow_runs[] | select(.conclusion == \"success\") | .id" \
+              --jq ".workflow_runs[] | select(.head_sha == \"$TAG_SHA\" and .conclusion == \"success\") | .id" \
               2>/dev/null | head -1)
             if [ -n "$ID" ] && [ "$ID" != "null" ]; then
-              echo "  $WF → existing run $ID (branch $BRANCH)" >&2
+              echo "  $WF → existing run $ID for $TAG_SHA" >&2
               echo "$ID"
               return
             fi
-          
-            echo "  $WF → no successful run on $BRANCH, triggering..." >&2
+
+            echo "  $WF → no run found for $TAG_SHA, triggering on $BRANCH..." >&2
             gh api "repos/${{ github.repository }}/actions/workflows/$WF/dispatches" \
               -f ref="$BRANCH"
-          
+
             local ELAPSED=0
             while true; do
-              ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=5" \
-                --jq ".workflow_runs[] | select(.status != \"completed\" or .conclusion == \"success\") | .id" \
+              ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=10" \
+                --jq ".workflow_runs[] | select(.head_sha == \"$TAG_SHA\") | .id" \
                 2>/dev/null | head -1)
               if [ -n "$ID" ] && [ "$ID" != "null" ]; then
                 STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.status')
@@ -85,89 +90,12 @@ jobs:
               sleep 30; ELAPSED=$((ELAPSED+30))
             done
           }
-          
+
           STD_ID=$(find_or_trigger_run "build-wheels.yml")
           EXT_ID=$(find_or_trigger_run "build-wheels-extended.yml")
           echo "std_run_id=$STD_ID" >> $GITHUB_OUTPUT
           echo "ext_run_id=$EXT_ID" >> $GITHUB_OUTPUT
           echo "Standard run: $STD_ID  |  Extended run: $EXT_ID"
-                  
-          echo "  $WF → no successful run on $BRANCH, triggering..." >&2
-          gh api "repos/${{ github.repository }}/actions/workflows/$WF/dispatches" \
-            -f ref="$BRANCH"
-        
-          local ELAPSED=0
-          while true; do
-            ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=5" \
-              --jq ".workflow_runs[] | select(.status != \"completed\" or .conclusion == \"success\") | .id" \
-              2>/dev/null | head -1)
-            if [ -n "$ID" ] && [ "$ID" != "null" ]; then
-              STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.status')
-              CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.conclusion // ""')
-              echo "  [${ELAPSED}s] $WF $ID: $STATUS/$CONCLUSION" >&2
-              if [ "$STATUS" = "completed" ]; then
-                [ "$CONCLUSION" = "success" ] && { echo "$ID"; return; }
-                echo "❌ $WF failed: $CONCLUSION" >&2; exit 1
-              fi
-            fi
-            sleep 30; ELAPSED=$((ELAPSED+30))
-          done
-          }
-          
-          STD_ID=$(find_or_trigger_run "build-wheels.yml")
-          EXT_ID=$(find_or_trigger_run "build-wheels-extended.yml")
-
-          STD_ID=$(find_run "build-wheels.yml")
-          EXT_ID=$(find_run "build-wheels-extended.yml")
-          echo "std_run_id=$STD_ID" >> $GITHUB_OUTPUT
-          echo "ext_run_id=$EXT_ID" >> $GITHUB_OUTPUT
-          echo "Standard run: $STD_ID  |  Extended run: $EXT_ID"
-
-      - name: Wait for both builds to complete
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          wait_for_run() {
-            local ID=$1 NAME=$2
-            if [ -z "$ID" ] || [ "$ID" = "null" ]; then
-              echo "⚠️  $NAME: no run found, skipping wait"
-              return 0
-            fi
-            echo "Polling $NAME (run $ID)..."
-            local ELAPSED=0
-            while true; do
-              STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.status' 2>/dev/null)
-              CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.conclusion // ""' 2>/dev/null)
-              echo "  [${ELAPSED}s] $NAME: status=$STATUS conclusion=$CONCLUSION"
-              if [ "$STATUS" = "completed" ]; then
-                [ "$CONCLUSION" = "success" ] && { echo "✅ $NAME done"; return 0; }
-                echo "❌ $NAME failed: $CONCLUSION"; exit 1
-              fi
-              sleep 30; ELAPSED=$((ELAPSED+30))
-            done
-          }
-          wait_for_run "${{ steps.resolve.outputs.std_run_id }}" "build-wheels"
-          wait_for_run "${{ steps.resolve.outputs.ext_run_id }}" "build-wheels-extended"
-
-      - name: Verify artifacts exist (manual trigger)
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for RUN_ID in "${{ steps.resolve.outputs.std_run_id }}" "${{ steps.resolve.outputs.ext_run_id }}"; do
-            if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-              echo "⚠️  No run ID found, skipping check"
-              continue
-            fi
-            COUNT=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts" --jq '.total_count' 2>/dev/null)
-            echo "Run $RUN_ID: $COUNT artifacts"
-            if [ "$COUNT" -eq "0" ]; then
-              echo "❌ No artifacts found for run $RUN_ID"
-              exit 1
-            fi
-          done
-          echo "✅ Artifacts verified for both runs"
 
       - name: Download standard wheels
         uses: dawidd6/action-download-artifact@v3
