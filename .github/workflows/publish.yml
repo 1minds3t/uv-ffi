@@ -19,7 +19,7 @@ jobs:
       url: https://pypi.org/p/uv-ffi
     permissions:
       id-token: write
-      actions: read
+      actions: write
     steps:
       - name: Checkout current workflow from HEAD
         uses: actions/checkout@v4
