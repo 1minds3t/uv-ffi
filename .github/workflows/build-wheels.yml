@@ -3,6 +3,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+        tag:
+          description: 'Tag to build (e.g. v0.10.7)'
+          required: false
+          default: ''
 
 jobs:
   build-linux:
@@ -14,7 +19,9 @@ jobs:
         python: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -60,7 +67,9 @@ jobs:
         python: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -165,7 +174,9 @@ jobs:
             pypath: 'C:\Python314\python.exe'
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - name: Add MSVC to PATH
         shell: cmd
         run: |
@@ -223,7 +234,9 @@ jobs:
             pypath: 'python'
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
