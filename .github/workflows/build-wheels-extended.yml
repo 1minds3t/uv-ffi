@@ -1,38 +1,10 @@
 name: "🔧 Build uv-ffi Wheels (Extended)"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# NEW workflow — does NOT modify the original "Build uv-ffi Wheels" workflow.
-# Covers every target the original misses:
-#
-#  Linux glibc (manylinux):
-#    manylinux_2_17  → oldest practical target (Rust ≥ 1.64 requires glibc 2.17)
-#                      covers armv7 / aarch64 / ppc64le / s390x / i686
-#    manylinux_2_28  → kept for x86_64 (same as original) — skipped here to
-#                      avoid duplicates; original already produces those wheels
-#
-#  Linux musl (musllinux):
-#    musllinux_1_2   → Alpine, static-linked, musl containers
-#                      covers x86_64 / i686 / aarch64 / armv7 / ppc64le / s390x
-#
-#  Notes:
-#    • All jobs have continue-on-error: true — failures are logged, not fatal.
-#    • QEMU is set up once per job for any non-x86_64 target.
-#    • manylinux container builds use --find-interpreter so the container
-#      discovers all bundled Python versions; setup-python is skipped for
-#      Linux because maturin-action ignores it inside Docker anyway.
-#    • piwheels target = armv7 glibc (manylinux_2_17) — explicitly included.
-#    • Artifact names are unique and never collide with the original workflow.
-# ─────────────────────────────────────────────────────────────────────────────
-
 on:
   release:
     types: [published]
   workflow_dispatch:
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 1 — Linux glibc manylinux_2_17 (old glibc, max compat)
-# Targets: x86_64, i686, aarch64, armv7 (piwheels!), ppc64le, s390x
-# ─────────────────────────────────────────────────────────────────────────────
 jobs:
   build-linux-glibc-2_17:
     name: "glibc 2.17 • ${{ matrix.target }}"
@@ -50,12 +22,24 @@ jobs:
           - s390x-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
-      
       - name: Cache Rust dependencies
         uses: swatinem/rust-cache@v2
 
-      # QEMU needed for every non-x86_64 target — maturin-action uses Docker
-      # cross-compile images, but binfmt must be registered for the runner.
+      - name: Check PyPI for existing wheel
+        id: pypi_check
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 'version' crates/uv-ffi/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "Checking PyPI for uv-ffi==$VERSION..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
+          if [ "$STATUS" = "200" ]; then
+            echo "Version $VERSION already on PyPI — skipping build"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "Version $VERSION not on PyPI — proceeding"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Set up QEMU (cross targets)
         if: matrix.target != 'x86_64' && matrix.target != 'i686'
         uses: docker/setup-qemu-action@v3
@@ -63,6 +47,7 @@ jobs:
           platforms: all
 
       - name: Build wheels (manylinux_2_17)
+        if: steps.pypi_check.outputs.skip == 'false'
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
@@ -75,17 +60,13 @@ jobs:
           CFLAGS_armv7_unknown_linux_gnueabihf: "-march=armv7-a"
 
       - name: Upload wheels
-        if: always()
+        if: steps.pypi_check.outputs.skip == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: "ext-wheels-linux-glibc217-${{ matrix.target }}"
           path: wheels/
           if-no-files-found: warn
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 2 — Linux musl musllinux_1_2 (Alpine, static-linked)
-# Targets: x86_64, i686, aarch64, armv7, ppc64le, s390x
-# ─────────────────────────────────────────────────────────────────────────────
   build-linux-musl:
     name: "musl 1.2 • ${{ matrix.target }}"
     runs-on: ubuntu-latest
@@ -102,7 +83,22 @@ jobs:
           - s390x-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
-
+      
+      - name: Check PyPI for existing wheel
+        id: pypi_check
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 'version' crates/uv-ffi/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "Checking PyPI for uv-ffi==$VERSION..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
+          if [ "$STATUS" = "200" ]; then
+            echo "Version $VERSION already on PyPI — skipping build"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "Version $VERSION not on PyPI — proceeding"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+          
       - name: Set up QEMU (cross targets)
         if: matrix.target != 'x86_64' && matrix.target != 'i686'
         uses: docker/setup-qemu-action@v3
@@ -110,6 +106,7 @@ jobs:
           platforms: all
 
       - name: Build wheels (musllinux_1_2)
+        if: steps.pypi_check.outputs.skip == 'false'
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
@@ -122,30 +119,42 @@ jobs:
           CFLAGS_armv7_unknown_linux_gnueabihf: "-march=armv7-a"
 
       - name: Upload wheels
-        if: always()
+        if: steps.pypi_check.outputs.skip == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: "ext-wheels-linux-musl-${{ matrix.target }}"
           path: wheels/
           if-no-files-found: warn
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 3 — Linux riscv64 (glibc, manylinux_2_31 — earliest container available)
-# Tier-3 target, likely to fail on older Rust/PyO3 but worth attempting.
-# ─────────────────────────────────────────────────────────────────────────────
   build-linux-riscv64:
     name: "riscv64 glibc 2.31"
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-
+      
+      - name: Check PyPI for existing wheel
+        id: pypi_check
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 'version' crates/uv-ffi/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "Checking PyPI for uv-ffi==$VERSION..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
+          if [ "$STATUS" = "200" ]; then
+            echo "Version $VERSION already on PyPI — skipping build"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "Version $VERSION not on PyPI — proceeding"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+          
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: riscv64
 
       - name: Build wheels (manylinux_2_31)
+        if: steps.pypi_check.outputs.skip == 'false'
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
@@ -156,30 +165,42 @@ jobs:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
 
       - name: Upload wheels
-        if: always()
+        if: steps.pypi_check.outputs.skip == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: "ext-wheels-linux-riscv64"
           path: wheels/
           if-no-files-found: warn
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 4 — Linux loongarch64 (glibc 2.36 — China domestic arch, conda-forge
-# is adding support; tier-3 but easy win if Rust target is stable)
-# ─────────────────────────────────────────────────────────────────────────────
   build-linux-loongarch64:
     name: "loongarch64 glibc 2.36"
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-
+      
+      - name: Check PyPI for existing wheel
+        id: pypi_check
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 'version' crates/uv-ffi/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "Checking PyPI for uv-ffi==$VERSION..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
+          if [ "$STATUS" = "200" ]; then
+            echo "Version $VERSION already on PyPI — skipping build"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "Version $VERSION not on PyPI — proceeding"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+          
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: all
 
       - name: Build wheels (manylinux_2_36)
+        if: steps.pypi_check.outputs.skip == 'false'
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
@@ -190,18 +211,13 @@ jobs:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
 
       - name: Upload wheels
-        if: always()
+        if: steps.pypi_check.outputs.skip == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: "ext-wheels-linux-loongarch64"
           path: wheels/
           if-no-files-found: warn
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 5 — macOS universal2 (fat binary: x86_64 + arm64 in one wheel)
-# Covers Macs not already produced by the original workflow's per-OS matrix.
-# The original builds separate x86_64 and arm64 wheels; this adds universal2.
-# ─────────────────────────────────────────────────────────────────────────────
   build-macos-universal2:
     name: "macOS universal2"
     runs-on: macos-latest
@@ -212,11 +228,28 @@ jobs:
         python: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Check PyPI for existing wheel
+        id: pypi_check
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 'version' crates/uv-ffi/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "Checking PyPI for uv-ffi==$VERSION..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
+          if [ "$STATUS" = "200" ]; then
+            echo "Version $VERSION already on PyPI — skipping build"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "Version $VERSION not on PyPI — proceeding"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+          
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
 
       - name: Build universal2 wheel
+        if: steps.pypi_check.outputs.skip == 'false'
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
@@ -226,17 +259,13 @@ jobs:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
 
       - name: Upload wheels
-        if: always()
+        if: steps.pypi_check.outputs.skip == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: "ext-wheels-macos-universal2-py${{ matrix.python }}"
           path: wheels/
           if-no-files-found: warn
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JOB 6 — Windows i686 (32-bit x86)
-# Not in original workflow (original only does x64 + arm64).
-# ─────────────────────────────────────────────────────────────────────────────
   build-windows-i686:
     name: "Windows i686 • py${{ matrix.python }}"
     runs-on: windows-latest
@@ -247,12 +276,29 @@ jobs:
         python: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
           architecture: x86
 
+      - name: Check PyPI for existing wheel
+        id: pypi_check
+        shell: powershell
+        run: |
+          $version = (Select-String -Path "crates\uv-ffi\Cargo.toml" -Pattern 'version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          Write-Host "Checking PyPI for uv-ffi==$version..."
+          try {
+            Invoke-WebRequest -Uri "https://pypi.org/pypi/uv-ffi/$version/json" -Method Head -UseBasicParsing -ErrorAction Stop | Out-Null
+            Write-Host "Version $version already on PyPI — skipping build"
+            "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } catch {
+            Write-Host "Version $version not on PyPI — proceeding"
+            "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
       - name: Build wheel (i686)
+        if: steps.pypi_check.outputs.skip == 'false'
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
@@ -262,20 +308,16 @@ jobs:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
 
       - name: Upload wheels
-        if: always()
+        if: steps.pypi_check.outputs.skip == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: "ext-wheels-windows-i686-py${{ matrix.python }}"
           path: wheels/
           if-no-files-found: warn
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SUMMARY JOB — collects all artifacts into one download, logs any failures
-# ─────────────────────────────────────────────────────────────────────────────
   collect-wheels:
     name: "Collect all extended wheels"
     runs-on: ubuntu-latest
-    # Always run even if some build jobs failed (they have continue-on-error)
     if: always()
     needs:
       - build-linux-glibc-2_17
