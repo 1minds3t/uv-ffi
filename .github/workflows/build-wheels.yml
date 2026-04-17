@@ -33,7 +33,7 @@ jobs:
           VERSION=$(grep -m1 'version' crates/uv-ffi/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           echo "Checking PyPI for uv-ffi==$VERSION..."
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
-          if[ "$STATUS" = "200" ]; then
+          if [ "$STATUS" = "200" ]; then
             echo "Version $VERSION already on PyPI — skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
@@ -81,7 +81,7 @@ jobs:
           VERSION=$(grep -m1 'version' crates/uv-ffi/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
           echo "Checking PyPI for uv-ffi==$VERSION..."
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
-          if[ "$STATUS" = "200" ]; then
+          if [ "$STATUS" = "200" ]; then
             echo "Version $VERSION already on PyPI — skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
