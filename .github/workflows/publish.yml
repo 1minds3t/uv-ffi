@@ -96,16 +96,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RUN_ID="${{ steps.resolve.outputs.build_run_id }}"
-          ARTIFACT_COUNT=$(gh api \
-            "repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts" \
-            --jq '.total_count' 2>/dev/null)
-          echo "Artifacts found in run $RUN_ID: $ARTIFACT_COUNT"
-          if [ "$ARTIFACT_COUNT" -eq "0" ]; then
-            echo "❌ No artifacts found for run $RUN_ID"
-            exit 1
-          fi
-          echo "✅ $ARTIFACT_COUNT artifacts ready to publish"
+          for RUN_ID in "${{ steps.resolve.outputs.std_run_id }}" "${{ steps.resolve.outputs.ext_run_id }}"; do
+            if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+              echo "⚠️  No run ID found, skipping check"
+              continue
+            fi
+            COUNT=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts" --jq '.total_count' 2>/dev/null)
+            echo "Run $RUN_ID: $COUNT artifacts"
+            if [ "$COUNT" -eq "0" ]; then
+              echo "❌ No artifacts found for run $RUN_ID"
+              exit 1
+            fi
+          done
+          echo "✅ Artifacts verified for both runs"
 
       - name: Download standard wheels
         uses: dawidd6/action-download-artifact@v3
