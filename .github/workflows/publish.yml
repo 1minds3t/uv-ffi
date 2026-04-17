@@ -57,24 +57,35 @@ jobs:
           echo "Tag SHA: $TAG_SHA"
 
           # ── Find or trigger run by SHA on ffi branch ─────────────
-          find_or_trigger_run() {
+          find_run() {
+            local WF=$1
+            gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
+              --jq ".workflow_runs[] | select(.head_sha == \"$TAG_SHA\" and .conclusion == \"success\") | .id" \
+              2>/dev/null | head -1
+          }
+          
+          trigger_if_missing() {
             local WF=$1
             local ID
-            ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
-              --jq ".workflow_runs[] | select(.head_sha == \"$TAG_SHA\" and .conclusion == \"success\") | .id" \
-              2>/dev/null | head -1)
+            ID=$(find_run "$WF")
             if [ -n "$ID" ] && [ "$ID" != "null" ]; then
-              echo "  $WF → existing run $ID for $TAG_SHA" >&2
-              echo "$ID"
-              return
+              echo "  $WF → existing run $ID" >&2
+            else
+              echo "  $WF → triggering on $BRANCH..." >&2
+              gh api "repos/${{ github.repository }}/actions/workflows/$WF/dispatches" \
+                -f ref="$BRANCH"
             fi
-
-            echo "  $WF → no run found for $TAG_SHA, triggering on $BRANCH..." >&2
-            gh api "repos/${{ github.repository }}/actions/workflows/$WF/dispatches" \
-              -f ref="$BRANCH"
-
+          }
+          
+          # Fire both dispatches before polling either
+          trigger_if_missing "build-wheels.yml"
+          trigger_if_missing "build-wheels-extended.yml"
+          
+          wait_for_run() {
+            local WF=$1
             local ELAPSED=0
             while true; do
+              local ID
               ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=10" \
                 --jq ".workflow_runs[] | select(.head_sha == \"$TAG_SHA\") | .id" \
                 2>/dev/null | head -1)
@@ -90,9 +101,20 @@ jobs:
               sleep 30; ELAPSED=$((ELAPSED+30))
             done
           }
-
-          STD_ID=$(find_or_trigger_run "build-wheels.yml")
-          EXT_ID=$(find_or_trigger_run "build-wheels-extended.yml")
+          
+          # Poll both in background, collect results
+          STD_ID=$(wait_for_run "build-wheels.yml") &
+          STD_PID=$!
+          EXT_ID=$(wait_for_run "build-wheels-extended.yml") &
+          EXT_PID=$!
+          
+          wait $STD_PID || exit 1
+          wait $EXT_PID || exit 1
+          
+          # Re-capture since subshell vars don't export
+          STD_ID=$(find_run "build-wheels.yml")
+          EXT_ID=$(find_run "build-wheels-extended.yml")
+          
           echo "std_run_id=$STD_ID" >> $GITHUB_OUTPUT
           echo "ext_run_id=$EXT_ID" >> $GITHUB_OUTPUT
           echo "Standard run: $STD_ID  |  Extended run: $EXT_ID"
