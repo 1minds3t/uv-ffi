@@ -53,11 +53,15 @@ jobs:
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
 
           # ── Find run by branch ────────────────────────────────────
+          TAG_SHA=$(gh api "repos/${{ github.repository }}/git/refs/tags/$TAG" --jq '.object.sha' 2>/dev/null)
+          # dereference if annotated tag
+          TAG_SHA=$(gh api "repos/${{ github.repository }}/git/tags/$TAG_SHA" --jq '.object.sha' 2>/dev/null || echo "$TAG_SHA")
+          
           find_run() {
             local WF=$1
             local ID
-            ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=10" \
-              --jq ".workflow_runs[] | select(.conclusion == \"success\") | .id" \
+            ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
+              --jq ".workflow_runs[] | select(.conclusion == \"success\" and .head_sha == \"$TAG_SHA\") | .id" \
               2>/dev/null | head -1)
             if [ -z "$ID" ] || [ "$ID" = "null" ]; then
               echo "❌ ERROR: No successful run found for $WF on branch $BRANCH" >&2
