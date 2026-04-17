@@ -4,6 +4,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+        tag:
+          description: 'Tag to build (e.g. v0.10.7)'
+          required: false
+          default: ''
 
 jobs:
   build-linux-glibc-2_17:
@@ -22,6 +27,9 @@ jobs:
           - s390x-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
+        with:
+        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - name: Cache Rust dependencies
         uses: swatinem/rust-cache@v2
 
@@ -83,7 +91,9 @@ jobs:
           - s390x-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - name: Check PyPI for existing wheel
         id: pypi_check
         shell: bash
@@ -132,7 +142,9 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - name: Check PyPI for existing wheel
         id: pypi_check
         shell: bash
@@ -178,7 +190,9 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - name: Check PyPI for existing wheel
         id: pypi_check
         shell: bash
@@ -228,7 +242,9 @@ jobs:
         python: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
+          ref: ${{ github.event.inputs.tag || github.ref }} 
       - name: Check PyPI for existing wheel
         id: pypi_check
         shell: bash
@@ -276,7 +292,9 @@ jobs:
         python: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
+          ref: ${{ github.event.inputs.tag || github.ref }} 
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
