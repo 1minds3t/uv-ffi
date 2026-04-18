@@ -196,7 +196,7 @@ jobs:
           echo LIB=%LIB% >> %GITHUB_ENV%
           echo LIBPATH=%LIBPATH% >> %
 
-            - name: Check PyPI for existing wheel
+      - name: Check PyPI for existing wheel
         id: pypi_check
         shell: powershell
         run: |
