@@ -30,7 +30,11 @@ jobs:
         id: pypi_check
         shell: bash
         run: |
-          VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          VERSION="${{ github.event.inputs.tag }}"
+          VERSION="${VERSION#v}"
+          if [ -z "$VERSION" ]; then
+            VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          fi
           echo "Checking PyPI for uv-ffi==$VERSION..."
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
           if [ "$STATUS" = "200" ]; then
@@ -78,7 +82,11 @@ jobs:
         id: pypi_check
         shell: bash
         run: |
-          VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          VERSION="${{ github.event.inputs.tag }}"
+          VERSION="${VERSION#v}"
+          if [ -z "$VERSION" ]; then
+            VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          fi
           echo "Checking PyPI for uv-ffi==$VERSION..."
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
           if [ "$STATUS" = "200" ]; then
