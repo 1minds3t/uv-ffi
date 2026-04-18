@@ -78,7 +78,7 @@ jobs:
               gh api "repos/${{ github.repository }}/actions/workflows/$WF/dispatches" \
                 -f ref="$BRANCH" \
                 -f inputs[tag]="${{ steps.resolve.outputs.tag }}"
-              sleep 10
+              sleep 15
               local NEW_ID ATTEMPTS=0
               while true; do
                 NEW_ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=10" \
@@ -86,8 +86,9 @@ jobs:
                   2>/dev/null | head -1)
                 [ -n "$NEW_ID" ] && [ "$NEW_ID" != "null" ] && break
                 ATTEMPTS=$((ATTEMPTS+1))
-                [ $ATTEMPTS -gt 12 ] && { echo "❌ Could not find dispatched run for $WF" >&2; exit 1; }
-                sleep 5
+                echo "  waiting for run to appear... attempt $ATTEMPTS" >&2
+                [ $ATTEMPTS -gt 24 ] && { echo "❌ Could not find dispatched run for $WF" >&2; exit 1; }
+                sleep 10
               done
               echo "$NEW_ID" > "/tmp/run_id_${WF//\//_}"
               echo "  $WF → dispatched run $NEW_ID" >&2
