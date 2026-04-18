@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           
-            - name: Check PyPI for existing wheel
+      - name: Check PyPI for existing wheel
         id: pypi_check
         shell: powershell
         run: |
