@@ -154,6 +154,9 @@ jobs:
           name: wheels-*
           name_is_regexp: true
           path: dist/
+          if_no_artifact_found: ignore
+        continue-on-error: true
+        id: dl_std
 
       - name: Download extended wheels
         uses: dawidd6/action-download-artifact@v3
@@ -163,6 +166,24 @@ jobs:
           name: ext-wheels-*
           name_is_regexp: true
           path: dist/
+          if_no_artifact_found: ignore
+        continue-on-error: true
+        id: dl_ext
+
+      - name: Check artifact results
+        run: |
+          STD_RUN="${{ steps.resolve.outputs.std_run_id }}"
+          EXT_RUN="${{ steps.resolve.outputs.ext_run_id }}"
+          echo "Standard run: $STD_RUN — $(ls dist/wheels-* 2>/dev/null | wc -l) artifact dirs"
+          echo "Extended run: $EXT_RUN — $(ls dist/ext-wheels-* 2>/dev/null | wc -l) artifact dirs"
+          TOTAL=$(find dist/ -name "*.whl" 2>/dev/null | wc -l)
+          echo "Total wheels found: $TOTAL"
+          if [ "$TOTAL" = "0" ]; then
+            echo "All wheels already on PyPI - no new artifacts to upload. All builds skipped."
+            echo "Check runs: https://github.com/${{ github.repository }}/actions/runs/$STD_RUN"
+            echo "            https://github.com/${{ github.repository }}/actions/runs/$EXT_RUN"
+            exit 1
+          fi
 
       - name: Flatten wheels into dist/
         run: |
