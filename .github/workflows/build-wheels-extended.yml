@@ -42,18 +42,16 @@ jobs:
           if [ -z "$VERSION" ]; then
             VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           fi
-          PYVER="cp$( echo "${{ matrix.python }}" | tr -d '.' )"
           TARGET="${{ matrix.target }}"
           TARGET="${TARGET%%-*}"
           [[ "$TARGET" == "armv7" ]] && TARGET="armv7l"
-          WHEEL="uv_ffi-${VERSION}-${PYVER}-${PYVER}-manylinux_2_17_${TARGET}.manylinux2014_${TARGET}.whl"
-          echo "Checking PyPI for $WHEEL..."
-          PYPI_FILES=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; print('found' if '${WHEEL}' in files else 'missing')" 2>/dev/null)
-          if [ "$PYPI_FILES" = "found" ]; then
-            echo "Wheel $WHEEL already on PyPI - skipping build"
+          echo "Checking PyPI for any manylinux_2_17_${TARGET} wheels for $VERSION..."
+          PYPI_FILES=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; matches=[f for f in files if 'manylinux_2_17_${TARGET}' in f]; print('found' if matches else 'missing'); [print('  ',f) for f in matches]" 2>/dev/null)
+          if [[ "$PYPI_FILES" == found* ]]; then
+            echo "Wheels for manylinux_2_17_${TARGET} already on PyPI - skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Wheel $WHEEL not on PyPI - proceeding"
+            echo "Wheels for manylinux_2_17_${TARGET} not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
@@ -112,18 +110,16 @@ jobs:
           if [ -z "$VERSION" ]; then
             VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           fi
-          PYVER="cp$( echo "${{ matrix.python }}" | tr -d '.' )"
           TARGET="${{ matrix.target }}"
           TARGET="${TARGET%%-*}"
           [[ "$TARGET" == "armv7" ]] && TARGET="armv7l"
-          WHEEL="uv_ffi-${VERSION}-${PYVER}-${PYVER}-musllinux_1_2_${TARGET}.whl"
-          echo "Checking PyPI for $WHEEL..."
-          PYPI_FILES=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; print('found' if '${WHEEL}' in files else 'missing')" 2>/dev/null)
-          if [ "$PYPI_FILES" = "found" ]; then
-            echo "Wheel $WHEEL already on PyPI - skipping build"
+          echo "Checking PyPI for any musllinux_1_2_${TARGET} wheels for $VERSION..."
+          PYPI_FILES=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; matches=[f for f in files if 'musllinux_1_2_${TARGET}' in f]; print('found' if matches else 'missing'); [print('  ',f) for f in matches]" 2>/dev/null)
+          if [[ "$PYPI_FILES" == found* ]]; then
+            echo "Wheels for musllinux_1_2_${TARGET} already on PyPI - skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Wheel $WHEEL not on PyPI - proceeding"
+            echo "Wheels for musllinux_1_2_${TARGET} not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
           
@@ -172,15 +168,13 @@ jobs:
           if [ -z "$VERSION" ]; then
             VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           fi
-          PYVER="cp$( echo "${{ matrix.python }}" | tr -d '.' )"
-          WHEEL="uv_ffi-${VERSION}-${PYVER}-${PYVER}-manylinux_2_31_riscv64.whl"
-          echo "Checking PyPI for $WHEEL..."
-          PYPI_FILES=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; print('found' if '${WHEEL}' in files else 'missing')" 2>/dev/null)
-          if [ "$PYPI_FILES" = "found" ]; then
-            echo "Wheel $WHEEL already on PyPI - skipping build"
+          echo "Checking PyPI for any manylinux_2_31_riscv64 wheels for $VERSION..."
+          PYPI_FILES=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; matches=[f for f in files if 'manylinux_2_31_riscv64' in f]; print('found' if matches else 'missing')" 2>/dev/null)
+          if [[ "$PYPI_FILES" == found* ]]; then
+            echo "Wheels for riscv64 already on PyPI - skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Wheel $WHEEL not on PyPI - proceeding"
+            echo "Wheels for riscv64 not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
           
@@ -226,15 +220,13 @@ jobs:
           if [ -z "$VERSION" ]; then
             VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           fi
-          PYVER="cp$( echo "${{ matrix.python }}" | tr -d '.' )"
-          WHEEL="uv_ffi-${VERSION}-${PYVER}-${PYVER}-manylinux_2_36_loongarch64.whl"
-          echo "Checking PyPI for $WHEEL..."
-          PYPI_FILES=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; print('found' if '${WHEEL}' in files else 'missing')" 2>/dev/null)
-          if [ "$PYPI_FILES" = "found" ]; then
-            echo "Wheel $WHEEL already on PyPI - skipping build"
+          echo "Checking PyPI for any manylinux_2_36_loongarch64 wheels for $VERSION..."
+          PYPI_FILES=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; matches=[f for f in files if 'loongarch64' in f]; print('found' if matches else 'missing')" 2>/dev/null)
+          if [[ "$PYPI_FILES" == found* ]]; then
+            echo "Wheels for loongarch64 already on PyPI - skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Wheel $WHEEL not on PyPI - proceeding"
+            echo "Wheels for loongarch64 not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
           
