@@ -42,13 +42,18 @@ jobs:
           if [ -z "$VERSION" ]; then
             VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           fi
-          echo "Checking PyPI for uv-ffi==$VERSION..."
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
-          if [ "$STATUS" = "200" ]; then
-            echo "Version $VERSION already on PyPI - skipping build"
+          PYVER="cp$( echo "${{ matrix.python }}" | tr -d '.' )"
+          TARGET="${{ matrix.target }}"
+          TARGET="${TARGET%%-*}"
+          [[ "$TARGET" == "armv7" ]] && TARGET="armv7l"
+          WHEEL="uv_ffi-${VERSION}-${PYVER}-${PYVER}-manylinux_2_17_${TARGET}.manylinux2014_${TARGET}.whl"
+          echo "Checking PyPI for $WHEEL..."
+          PYPI_FILES=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; print('found' if '${WHEEL}' in files else 'missing')" 2>/dev/null)
+          if [ "$PYPI_FILES" = "found" ]; then
+            echo "Wheel $WHEEL already on PyPI - skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Version $VERSION not on PyPI - proceeding"
+            echo "Wheel $WHEEL not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
@@ -107,13 +112,18 @@ jobs:
           if [ -z "$VERSION" ]; then
             VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           fi
-          echo "Checking PyPI for uv-ffi==$VERSION..."
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
-          if [ "$STATUS" = "200" ]; then
-            echo "Version $VERSION already on PyPI - skipping build"
+          PYVER="cp$( echo "${{ matrix.python }}" | tr -d '.' )"
+          TARGET="${{ matrix.target }}"
+          TARGET="${TARGET%%-*}"
+          [[ "$TARGET" == "armv7" ]] && TARGET="armv7l"
+          WHEEL="uv_ffi-${VERSION}-${PYVER}-${PYVER}-musllinux_1_2_${TARGET}.whl"
+          echo "Checking PyPI for $WHEEL..."
+          PYPI_FILES=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; print('found' if '${WHEEL}' in files else 'missing')" 2>/dev/null)
+          if [ "$PYPI_FILES" = "found" ]; then
+            echo "Wheel $WHEEL already on PyPI - skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Version $VERSION not on PyPI - proceeding"
+            echo "Wheel $WHEEL not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
           
@@ -162,13 +172,15 @@ jobs:
           if [ -z "$VERSION" ]; then
             VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           fi
-          echo "Checking PyPI for uv-ffi==$VERSION..."
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
-          if [ "$STATUS" = "200" ]; then
-            echo "Version $VERSION already on PyPI - skipping build"
+          PYVER="cp$( echo "${{ matrix.python }}" | tr -d '.' )"
+          WHEEL="uv_ffi-${VERSION}-${PYVER}-${PYVER}-manylinux_2_31_riscv64.whl"
+          echo "Checking PyPI for $WHEEL..."
+          PYPI_FILES=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; print('found' if '${WHEEL}' in files else 'missing')" 2>/dev/null)
+          if [ "$PYPI_FILES" = "found" ]; then
+            echo "Wheel $WHEEL already on PyPI - skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Version $VERSION not on PyPI - proceeding"
+            echo "Wheel $WHEEL not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
           
@@ -214,13 +226,15 @@ jobs:
           if [ -z "$VERSION" ]; then
             VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           fi
-          echo "Checking PyPI for uv-ffi==$VERSION..."
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
-          if [ "$STATUS" = "200" ]; then
-            echo "Version $VERSION already on PyPI - skipping build"
+          PYVER="cp$( echo "${{ matrix.python }}" | tr -d '.' )"
+          WHEEL="uv_ffi-${VERSION}-${PYVER}-${PYVER}-manylinux_2_36_loongarch64.whl"
+          echo "Checking PyPI for $WHEEL..."
+          PYPI_FILES=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; print('found' if '${WHEEL}' in files else 'missing')" 2>/dev/null)
+          if [ "$PYPI_FILES" = "found" ]; then
+            echo "Wheel $WHEEL already on PyPI - skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Version $VERSION not on PyPI - proceeding"
+            echo "Wheel $WHEEL not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
           
@@ -270,13 +284,15 @@ jobs:
           if [ -z "$VERSION" ]; then
             VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           fi
-          echo "Checking PyPI for uv-ffi==$VERSION..."
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
-          if [ "$STATUS" = "200" ]; then
-            echo "Version $VERSION already on PyPI - skipping build"
+          PYVER="cp$( echo "${{ matrix.python }}" | tr -d '.' )"
+          WHEEL="uv_ffi-${VERSION}-${PYVER}-${PYVER}-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl"
+          echo "Checking PyPI for $WHEEL..."
+          PYPI_FILES=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; print('found' if '${WHEEL}' in files else 'missing')" 2>/dev/null)
+          if [ "$PYPI_FILES" = "found" ]; then
+            echo "Wheel $WHEEL already on PyPI - skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Version $VERSION not on PyPI - proceeding"
+            echo "Wheel $WHEEL not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
           
@@ -324,14 +340,17 @@ jobs:
         id: pypi_check
         shell: powershell
         run: |
-          $version = (Select-String -Path "crates\uv-ffi\pyproject.toml" -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
-          Write-Host "Checking PyPI for uv-ffi==$version..."
-          try {
-            Invoke-WebRequest -Uri "https://pypi.org/pypi/uv-ffi/$version/json" -Method Head -UseBasicParsing -ErrorAction Stop | Out-Null
-            Write-Host "Version $version already on PyPI - skipping build"
+          $tag = "${{ github.event.inputs.tag }}"
+          $version = if ($tag) { $tag.TrimStart("v") } else { (Select-String -Path "crates\uv-ffi\pyproject.toml" -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value }
+          $pyver = "cp" + ("${{ matrix.python }}" -replace '\.', '')
+          $wheel = "uv_ffi-${version}-${pyver}-${pyver}-win32.whl"
+          Write-Host "Checking PyPI for $wheel..."
+          $files = (Invoke-RestMethod "https://pypi.org/pypi/uv-ffi/$version/json" -ErrorAction SilentlyContinue).urls.filename
+          if ($files -contains $wheel) {
+            Write-Host "Wheel $wheel already on PyPI - skipping build"
             "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          } catch {
-            Write-Host "Version $version not on PyPI - proceeding"
+          } else {
+            Write-Host "Wheel $wheel not on PyPI - proceeding"
             "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           }
 
