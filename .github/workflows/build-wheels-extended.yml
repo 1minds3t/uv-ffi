@@ -41,10 +41,10 @@ jobs:
           echo "Checking PyPI for uv-ffi==$VERSION..."
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
           if [ "$STATUS" = "200" ]; then
-            echo "Version $VERSION already on PyPI — skipping build"
+            echo "Version $VERSION already on PyPI - skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Version $VERSION not on PyPI — proceeding"
+            echo "Version $VERSION not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
@@ -102,10 +102,10 @@ jobs:
           echo "Checking PyPI for uv-ffi==$VERSION..."
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
           if [ "$STATUS" = "200" ]; then
-            echo "Version $VERSION already on PyPI — skipping build"
+            echo "Version $VERSION already on PyPI - skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Version $VERSION not on PyPI — proceeding"
+            echo "Version $VERSION not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
           
@@ -153,10 +153,10 @@ jobs:
           echo "Checking PyPI for uv-ffi==$VERSION..."
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
           if [ "$STATUS" = "200" ]; then
-            echo "Version $VERSION already on PyPI — skipping build"
+            echo "Version $VERSION already on PyPI - skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Version $VERSION not on PyPI — proceeding"
+            echo "Version $VERSION not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
           
@@ -201,10 +201,10 @@ jobs:
           echo "Checking PyPI for uv-ffi==$VERSION..."
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
           if [ "$STATUS" = "200" ]; then
-            echo "Version $VERSION already on PyPI — skipping build"
+            echo "Version $VERSION already on PyPI - skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Version $VERSION not on PyPI — proceeding"
+            echo "Version $VERSION not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
           
@@ -253,10 +253,10 @@ jobs:
           echo "Checking PyPI for uv-ffi==$VERSION..."
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
           if [ "$STATUS" = "200" ]; then
-            echo "Version $VERSION already on PyPI — skipping build"
+            echo "Version $VERSION already on PyPI - skipping build"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Version $VERSION not on PyPI — proceeding"
+            echo "Version $VERSION not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
           
@@ -308,10 +308,10 @@ jobs:
           Write-Host "Checking PyPI for uv-ffi==$version..."
           try {
             Invoke-WebRequest -Uri "https://pypi.org/pypi/uv-ffi/$version/json" -Method Head -UseBasicParsing -ErrorAction Stop | Out-Null
-            Write-Host "Version $version already on PyPI — skipping build"
+            Write-Host "Version $version already on PyPI - skipping build"
             "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           } catch {
-            Write-Host "Version $version not on PyPI — proceeding"
+            Write-Host "Version $version not on PyPI - proceeding"
             "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           }
 
