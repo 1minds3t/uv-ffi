@@ -26,20 +26,30 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           
-      - name: Check PyPI for existing wheel
+            - name: Check PyPI for existing wheel
         id: pypi_check
-        shell: bash
+        shell: powershell
         run: |
-          VERSION=$(grep -m1 'version' crates/uv-ffi/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-          echo "Checking PyPI for uv-ffi==$VERSION..."
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
-          if [ "$STATUS" = "200" ]; then
-            echo "Version $VERSION already on PyPI — skipping build"
-            echo "skip=true" >> $GITHUB_OUTPUT
-          else
-            echo "Version $VERSION not on PyPI — proceeding"
-            echo "skip=false" >> $GITHUB_OUTPUT
-          fi
+          try {
+            $content = Get-Content -Path "crates\uv-ffi\Cargo.toml" -Raw
+            if ($content -match 'version\s*=\s*"([^"]+)"') {
+              $version = $matches[1]
+              Write-Host "Found version: $version"
+            } else {
+              Write-Host "Could not find version in Cargo.toml"
+              $version = "unknown"
+            }
+
+            Write-Host "Checking PyPI for uv-ffi==$version..."
+            $response = Invoke-WebRequest -Uri "https://pypi.org/pypi/uv-ffi/$version/json" -Method Head -UseBasicParsing -ErrorAction Stop
+
+            Write-Host "Version $version already on PyPI — skipping build"
+            "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+          catch {
+            Write-Host "Version $version not on PyPI (or error checking) — proceeding"
+            "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          } 
           
       - name: Build wheel
         if: steps.pypi_check.outputs.skip == 'false'
