@@ -70,11 +70,40 @@ jobs:
             ID=$(find_run "$WF")
             if [ -n "$ID" ] && [ "$ID" != "null" ]; then
               echo "  $WF → existing run $ID" >&2
+              echo "$ID" > "/tmp/run_id_${WF//\//_}"
             else
               echo "  $WF → triggering on $BRANCH..." >&2
+              local BEFORE
+              BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
               gh api "repos/${{ github.repository }}/actions/workflows/$WF/dispatches" \
-                -f ref="$BRANCH"
+                -f ref="$BRANCH" \
+                -f inputs[tag]="${{ steps.resolve.outputs.tag }}"
+              sleep 10
+              local NEW_ID ATTEMPTS=0
+              while true; do
+                NEW_ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=10" \
+                  --jq ".workflow_runs[] | select(.created_at > \"$BEFORE\") | .id" \
+                  2>/dev/null | head -1)
+                [ -n "$NEW_ID" ] && [ "$NEW_ID" != "null" ] && break
+                ATTEMPTS=$((ATTEMPTS+1))
+                [ $ATTEMPTS -gt 12 ] && { echo "❌ Could not find dispatched run for $WF" >&2; exit 1; }
+                sleep 5
+              done
+              echo "$NEW_ID" > "/tmp/run_id_${WF//\//_}"
+              echo "  $WF → dispatched run $NEW_ID" >&2
             fi
+          }
+          
+          find_dispatched_run() {
+            local WF=$1
+            cat "/tmp/run_id_${WF//\//_}" 2>/dev/null
+          }
+          
+          find_dispatched_run() {
+            local WF=$1
+            gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=5" \
+              --jq ".workflow_runs[] | select(.event == \"workflow_dispatch\") | .id" \
+              2>/dev/null | head -1
           }
           
           # Fire both dispatches before polling either
@@ -84,11 +113,9 @@ jobs:
           wait_for_run() {
             local WF=$1
             local ELAPSED=0
+            local ID
+            ID=$(find_dispatched_run "$WF")
             while true; do
-              local ID
-              ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=10" \
-                --jq ".workflow_runs[] | select(.head_sha == \"$TAG_SHA\") | .id" \
-                2>/dev/null | head -1)
               if [ -n "$ID" ] && [ "$ID" != "null" ]; then
                 STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.status')
                 CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.conclusion // ""')
@@ -112,8 +139,8 @@ jobs:
           wait $EXT_PID || exit 1
           
           # Re-capture since subshell vars don't export
-          STD_ID=$(find_run "build-wheels.yml")
-          EXT_ID=$(find_run "build-wheels-extended.yml")
+          STD_ID=$(find_dispatched_run "build-wheels.yml")
+          EXT_ID=$(find_dispatched_run "build-wheels-extended.yml")
           
           echo "std_run_id=$STD_ID" >> $GITHUB_OUTPUT
           echo "ext_run_id=$EXT_ID" >> $GITHUB_OUTPUT
