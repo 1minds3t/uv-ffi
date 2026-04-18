@@ -218,8 +218,8 @@ jobs:
         run: |
           $tag = "${{ github.event.inputs.tag }}"
           $version = if ($tag) { $tag.TrimStart("v") } else { (Select-String -Path "crates\uv-ffi\pyproject.toml" -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value }
-          $pyver = "cp$("${{ matrix.python }}" -replace "\.","" )"
-          $vtag = $version -replace "\.",  "_"
+          $pyver = "cp" + ("${{ matrix.python }}" -replace "\.", "")
+          $vtag = $version -replace "\.", "_"
           $wheel = "uv_ffi-${vtag}-${pyver}-${pyver}-win_amd64.whl"
           Write-Host "Checking PyPI for $wheel..."
           $files = (Invoke-RestMethod "https://pypi.org/pypi/uv-ffi/$version/json" -ErrorAction SilentlyContinue).urls.filename
@@ -277,7 +277,7 @@ jobs:
         run: |
           $tag = "${{ github.event.inputs.tag }}"
           $version = if ($tag) { $tag.TrimStart("v") } else { (Select-String -Path "crates\uv-ffi\pyproject.toml" -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value }
-          $pyver = "cp$("${{ matrix.python }}" -replace "\.","" )"
+          $pyver = "cp" + ("${{ matrix.python }}" -replace "\.", "")
           $vtag = $version -replace "\.", "_"
           $wheel = "uv_ffi-${vtag}-${pyver}-${pyver}-win_arm64.whl"
           Write-Host "Checking PyPI for $wheel..."
