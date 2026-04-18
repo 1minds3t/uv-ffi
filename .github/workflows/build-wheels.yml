@@ -37,7 +37,7 @@ jobs:
           fi
           PYVER="cp$( echo "${{ matrix.python }}" | tr -d '.' )"
           TARGET="${{ matrix.target }}"
-          VERSION_TAG="${VERSION//./_}"
+          VERSION_TAG="${VERSION}"
           WHEEL="uv_ffi-${VERSION_TAG}-${PYVER}-${PYVER}-manylinux_2_28_${TARGET}.whl"
           echo "Checking PyPI for $WHEEL..."
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://files.pythonhosted.org/packages/source/u/uv-ffi/${WHEEL}")
@@ -99,7 +99,7 @@ jobs:
           fi
           PYVER="cp$( echo "${{ matrix.python }}" | tr -d '.' )"
           OS="${{ matrix.os }}"
-          VERSION_TAG="${VERSION//./_}"
+          VERSION_TAG="${VERSION}"
           if [[ "$OS" == "macos-15-intel" ]]; then
             WHEEL="uv_ffi-${VERSION_TAG}-${PYVER}-${PYVER}-macosx_10_12_x86_64.whl"
           else
@@ -219,7 +219,7 @@ jobs:
           $tag = "${{ github.event.inputs.tag }}"
           $version = if ($tag) { $tag.TrimStart("v") } else { (Select-String -Path "crates\uv-ffi\pyproject.toml" -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value }
           $pyver = "cp" + ("${{ matrix.python }}" -replace '\.', '')
-          $vtag = $version -replace '\.', '_'
+          $vtag = $version
           $wheel = "uv_ffi-${vtag}-${pyver}-${pyver}-win_amd64.whl"
           Write-Host "Checking PyPI for $wheel..."
           $files = (Invoke-RestMethod "https://pypi.org/pypi/uv-ffi/$version/json" -ErrorAction SilentlyContinue).urls.filename
@@ -278,7 +278,7 @@ jobs:
           $tag = "${{ github.event.inputs.tag }}"
           $version = if ($tag) { $tag.TrimStart("v") } else { (Select-String -Path "crates\uv-ffi\pyproject.toml" -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value }
           $pyver = "cp" + ("${{ matrix.python }}" -replace '\.', '')
-          $vtag = $version -replace '\.', '_'
+          $vtag = $version
           $wheel = "uv_ffi-${vtag}-${pyver}-${pyver}-win_arm64.whl"
           Write-Host "Checking PyPI for $wheel..."
           $files = (Invoke-RestMethod "https://pypi.org/pypi/uv-ffi/$version/json" -ErrorAction SilentlyContinue).urls.filename
