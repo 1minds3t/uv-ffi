@@ -123,7 +123,7 @@ jobs:
               BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
               gh api "repos/${{ github.repository }}/actions/workflows/$WF/dispatches" \
                 -f ref="$BRANCH" \
-                -f inputs[tag]="${{ steps.resolve.outputs.tag }}"
+                -f inputs[tag]="$TAG"
               sleep 15
               local NEW_ID ATTEMPTS=0
               while true; do
