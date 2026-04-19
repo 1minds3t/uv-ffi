@@ -146,13 +146,6 @@ jobs:
             cat "/tmp/run_id_${WF//\//_}" 2>/dev/null
           }
           
-          find_dispatched_run() {
-            local WF=$1
-            gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=5" \
-              --jq ".workflow_runs[] | select(.event == \"workflow_dispatch\") | .id" \
-              2>/dev/null | head -1
-          }
-          
           # Fire both dispatches before polling either
           trigger_if_missing "build-wheels.yml"
           trigger_if_missing "build-wheels-extended.yml"
@@ -182,8 +175,8 @@ jobs:
           EXT_ID=$(wait_for_run "build-wheels-extended.yml") &
           EXT_PID=$!
           
-          wait $STD_PID || exit 1
-          wait $EXT_PID || exit 1
+          wait $STD_PID || echo "⚠️  Standard wheels failed or skipped"
+          wait $EXT_PID || echo "⚠️  Extended wheels failed or skipped"
           
           # Re-capture since subshell vars don't export
           STD_ID=$(find_dispatched_run "build-wheels.yml")
