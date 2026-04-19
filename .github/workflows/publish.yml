@@ -103,11 +103,23 @@ jobs:
           echo "Tag SHA: $TAG_SHA"
 
           # ── Find or trigger run by SHA on ffi branch ─────────────
+          EXPECTED_VER="${TAG#v}"
+          echo "Expected version: $EXPECTED_VER"
+
           find_run() {
             local WF=$1
+            echo "  Scanning $WF for run matching version $EXPECTED_VER..." >&2
             gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
               --jq ".workflow_runs[] | select(.conclusion == \"success\") | .id" \
-              2>/dev/null | head -1
+              2>/dev/null | while read -r RUN_ID; do
+                ARTIFACT_NAMES=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts?per_page=10" \
+                  --jq '[.artifacts[].name] | join(",")' 2>/dev/null || true)
+                echo "  run $RUN_ID artifacts: $ARTIFACT_NAMES" >&2
+                if echo "$ARTIFACT_NAMES" | grep -qF "$EXPECTED_VER"; then
+                  echo "$RUN_ID"
+                  return
+                fi
+              done | head -1
           }
           
           trigger_if_missing() {
@@ -263,11 +275,11 @@ jobs:
           ls -la dist/ 2>/dev/null || echo "dist/ empty or missing"
           echo "DEBUG: whl count: $(find dist/ -name "*.whl" 2>/dev/null | wc -l)"
           echo "DEBUG: sdist count: $(find dist/ -name "*.tar.gz" 2>/dev/null | wc -l)"
-          echo "DEBUG: VERSION=$(find dist/ -name "*.whl" 2>/dev/null | head -1 | grep -oP '(?<=uv_ffi-)[^-]+')"
+          echo "DEBUG: VERSION=$(find dist/ -name "*.whl" 2>/dev/null | head -1 | grep -oP '(?<=uv_ffi-)[0-9][^-]+')"
           echo "DEBUG: next steps will check these counts"
-          VERSION=$(find dist/ -name "*.whl" 2>/dev/null | head -1 | grep -oP '(?<=uv_ffi-)[^-]+' || true)
+          VERSION=$(find dist/ -name "*.whl" 2>/dev/null | head -1 | grep -oP '(?<=uv_ffi-)[0-9][^-]+' || true)
           if [ -z "$VERSION" ]; then
-            VERSION=$(find dist/ -name "*.tar.gz" 2>/dev/null | head -1 | grep -oP '(?<=uv_ffi-)[^-]+')
+            VERSION=$(find dist/ -name "*.tar.gz" 2>/dev/null | head -1 | grep -oP '(?<=uv_ffi-)[0-9][^-]+(?:\.[a-z]+[0-9]+)?' || true)
           fi
           if [ -z "$VERSION" ]; then
             echo "No wheels or sdist left in dist/, nothing to do"
@@ -303,6 +315,14 @@ jobs:
         with:
           packages-dir: dist/
           skip-existing: true
+
+      - name: Clean attestations after OIDC failure
+        if: steps.oidc.outcome == 'failure'
+        run: |
+          echo "OIDC failed — purging any generated attestations before fallback..."
+          find dist/ -name "*.attestation" -delete 2>/dev/null || true
+          echo "dist/ contents:"
+          ls -lh dist/
 
       - name: Publish via API token (fallback)
         if: steps.oidc.outcome == 'failure'
