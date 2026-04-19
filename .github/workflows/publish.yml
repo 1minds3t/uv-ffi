@@ -232,9 +232,7 @@ jobs:
           fi
           if [ "$TOTAL" = "0" ] && [ "$SDIST" = "0" ]; then
             echo "All artifacts already on PyPI - nothing to upload."
-            echo "Check runs: https://github.com/${{ github.repository }}/actions/runs/$STD_RUN"
-            echo "            https://github.com/${{ github.repository }}/actions/runs/$EXT_RUN"
-            exit 1
+            exit 0
           fi
 
       - name: Flatten wheels into dist/
