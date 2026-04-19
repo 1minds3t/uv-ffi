@@ -267,7 +267,10 @@ jobs:
           echo "DEBUG: next steps will check these counts"
           VERSION=$(find dist/ -name "*.whl" 2>/dev/null | head -1 | grep -oP '(?<=uv_ffi-)[^-]+')
           if [ -z "$VERSION" ]; then
-            echo "No wheels left in dist/, nothing to do"
+            VERSION=$(find dist/ -name "*.tar.gz" 2>/dev/null | head -1 | grep -oP '(?<=uv_ffi-)[^-]+')
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "No wheels or sdist left in dist/, nothing to do"
             exit 0
           fi
           echo "Checking PyPI for version $VERSION..."
