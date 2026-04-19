@@ -1,329 +1,271 @@
-# uv
+# uv-ffi
 
-[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![image](https://img.shields.io/pypi/v/uv.svg)](https://pypi.python.org/pypi/uv)
-[![image](https://img.shields.io/pypi/l/uv.svg)](https://pypi.python.org/pypi/uv)
-[![image](https://img.shields.io/pypi/pyversions/uv.svg)](https://pypi.python.org/pypi/uv)
-[![Actions status](https://github.com/astral-sh/uv/actions/workflows/ci.yml/badge.svg)](https://github.com/astral-sh/uv/actions)
-[![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?logo=discord&logoColor=white)](https://discord.gg/astral-sh)
+Persistent in-process execution engine for [uv](https://github.com/astral-sh/uv)'s package resolver and installer.
 
-An extremely fast Python package and project manager, written in Rust.
+While `uv` is designed as a world-class CLI tool, `uv-ffi` re-architects its core as a **resident engine**. By keeping a Tokio runtime, HTTP connection pools, site-packages metadata, and interpreter state warm in memory across calls, it achieves execution speeds limited only by filesystem I/O.
 
-<p align="center">
-  <picture align="center">
-    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/astral-sh/uv/assets/1309177/03aa9163-1c79-4a87-a31d-7a9311ed9310">
-    <source media="(prefers-color-scheme: light)" srcset="https://github.com/astral-sh/uv/assets/1309177/629e59c0-9c6e-4013-9ad4-adb2bcf5080d">
-    <img alt="Shows a bar chart with benchmark results." src="https://github.com/astral-sh/uv/assets/1309177/629e59c0-9c6e-4013-9ad4-adb2bcf5080d">
-  </picture>
-</p>
+Used internally by [omnipkg](https://github.com/1minds3t/omnipkg), but directly callable from any long-lived Python process.
 
-<p align="center">
-  <i>Installing <a href="https://trio.readthedocs.io/">Trio</a>'s dependencies with a warm cache.</i>
-</p>
+---
 
-## Highlights
+## Usage
 
-- A single tool to replace `pip`, `pip-tools`, `pipx`, `poetry`, `pyenv`, `twine`, `virtualenv`, and
-  more.
-- [10-100x faster](https://github.com/astral-sh/uv/blob/main/BENCHMARKS.md) than `pip`.
-- Provides [comprehensive project management](#projects), with a
-  [universal lockfile](https://docs.astral.sh/uv/concepts/projects/layout#the-lockfile).
-- [Runs scripts](#scripts), with support for
-  [inline dependency metadata](https://docs.astral.sh/uv/guides/scripts#declaring-script-dependencies).
-- [Installs and manages](#python-versions) Python versions.
-- [Runs and installs](#tools) tools published as Python packages.
-- Includes a [pip-compatible interface](#the-pip-interface) for a performance boost with a familiar
-  CLI.
-- Supports Cargo-style [workspaces](https://docs.astral.sh/uv/concepts/projects/workspaces) for
-  scalable projects.
-- Disk-space efficient, with a [global cache](https://docs.astral.sh/uv/concepts/cache) for
-  dependency deduplication.
-- Installable without Rust or Python via `curl` or `pip`.
-- Supports macOS, Linux, and Windows.
+```python
+from uv_ffi import run, invalidate_site_packages_cache, patch_site_packages_cache, get_site_packages_cache
 
-uv is backed by [Astral](https://astral.sh), the creators of
-[Ruff](https://github.com/astral-sh/ruff) and [ty](https://github.com/astral-sh/ty).
+PY = '/path/to/your/python'
+BASE = f'pip install --python {PY} --link-mode symlink'
 
-## Installation
+# First call initializes the engine (~65-75ms, one-time cost)
+rc, installed, removed = run(f'{BASE} rich==14.3.2')
 
-Install uv with our standalone installers:
+# Subsequent calls use the warm engine (~5-6ms)
+rc, installed, removed = run(f'{BASE} rich==14.3.3')
+# -> installed=[('rich', '14.3.3')] removed=[('rich', '14.3.2')]
 
-```bash
-# On macOS and Linux.
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Isolated install into a target directory (bubble install)
+rc, installed, removed = run(f'pip install --python {PY} --target /tmp/myenv rich==14.3.2')
+# Main site-packages cache is untouched
+
+# Inspect engine's current in-memory view of the environment
+state = get_site_packages_cache()
+# -> [('rich', '14.3.3'), ('requests', '2.31.0'), ...]
 ```
 
-```bash
-# On Windows.
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+The key is keeping the import alive in a long-lived process. Each new Python subprocess pays ~70ms (interpreter startup + engine init). In a warm daemon worker, the same operation costs ~6ms.
+
+---
+
+## Performance
+
+Measured wall-clock time on Linux (NVMe SSD, Python 3.11, pre-warmed uv cache).
+
+### No-op (package already satisfied)
+
+| Method | Wall time | user | sys |
+|:--|--:|--:|--:|
+| `uv pip install` (subprocess) | ~11–12ms | 0.007s | 0.006s |
+| `uv-ffi` in-process (warm engine) | **~0.4–2ms** | 0.000s | 0.000s |
+| **Speedup** | **~6–8×** | | |
+
+### Real swap (uninstall + reinstall different version)
+
+| Method | Wall time | user | sys |
+|:--|--:|--:|--:|
+| `uv pip install` (subprocess) | ~17–20ms | 0.010s | 0.013s |
+| `uv-ffi` in-process (warm engine) | **~5.4–6.5ms** | 0.000s | 0.002s |
+| **Speedup** | **~2.5–3×** | | |
+
+### Cache operations
+
+| Method | Latency | Notes |
+|:--|--:|:--|
+| `uv` full site-packages rescan | ~2.5ms | paid on every CLI invocation |
+| `invalidate_site_packages_cache()` | ~2.5ms | forced rescan, same cost as uv |
+| `patch_site_packages_cache(installed, removed)` | **~25µs** | **~100× faster** than full rescan |
+| Post-install cache update (internal) | **0.0ms** | zero-disk: built from resolver changelog |
+
+The ~5–6ms floor on a real swap is the hardware limit — VFS symlink create/unlink on NVMe. uv-ffi eliminates all software overhead above that floor.
+
+**Important:** calling uv-ffi via a new subprocess each time (~73ms avg) is slower than calling `uv` directly (~19ms). The gains only materialize when the engine stays warm across multiple calls in the same process.
+
+---
+
+## API
+
+### `run(cmd: str) -> (int, list[tuple[str,str]], list[tuple[str,str]])`
+
+Execute a uv command in-process. Returns `(exit_code, installed, removed)` where installed/removed are lists of `(name, version)` tuples.
+
+```python
+rc, installed, removed = run('pip install --python /usr/bin/python3 rich==14.3.3')
 ```
 
-Or, from [PyPI](https://pypi.org/project/uv/):
+Supports all flags omnipkg uses on the fast path: `--python`, `--link-mode`, `--target`, `--index-url`, `--extra-index-url`, `--reinstall`, `-q`. Any unrecognized flag falls back to the full clap parse path automatically.
 
-```bash
-# With pip.
-pip install uv
+### `get_site_packages_cache() -> list[tuple[str, str]]`
+
+Returns the engine's current in-memory view of the environment as `[(name, version), ...]`. Returns an empty list if the cache has not been populated yet (before first install call). Zero disk I/O.
+
+```python
+state = get_site_packages_cache()
+# [('rich', '14.3.3'), ('requests', '2.31.0'), ...]
 ```
 
-```bash
-# Or pipx.
-pipx install uv
+### `invalidate_site_packages_cache()`
+
+Forces a full disk rescan on the next install call. Use when an external tool has modified the environment and you don't have the changelog. Cost: ~2.5ms on next call.
+
+### `patch_site_packages_cache(installed, removed)`
+
+Surgically update the in-memory cache with a known delta. ~100× faster than a full rescan. Returns `True` if the cache was live and patched, `False` if no cache was active.
+
+```python
+patch_site_packages_cache(
+    installed=[['rich', '14.3.3']],
+    removed=[['rich', '14.3.2']],
+)
 ```
 
-If installed via the standalone installer, uv can update itself to the latest version:
+### C ABI: `omnipkg_uv_run_c`
 
-```bash
-uv self update
+```c
+int omnipkg_uv_run_c(const char *cmd, char *out_json, int max_out);
 ```
 
-See the [installation documentation](https://docs.astral.sh/uv/getting-started/installation/) for
-details and alternative installation methods.
+Runs a uv command and writes a JSON changelog to `out_json`:
 
-## Documentation
-
-uv's documentation is available at [docs.astral.sh/uv](https://docs.astral.sh/uv).
-
-Additionally, the command line reference documentation can be viewed with `uv help`.
-
-## Features
-
-### Projects
-
-uv manages project dependencies and environments, with support for lockfiles, workspaces, and more,
-similar to `rye` or `poetry`:
-
-```console
-$ uv init example
-Initialized project `example` at `/home/user/example`
-
-$ cd example
-
-$ uv add ruff
-Creating virtual environment at: .venv
-Resolved 2 packages in 170ms
-   Built example @ file:///home/user/example
-Prepared 2 packages in 627ms
-Installed 2 packages in 1ms
- + example==0.1.0 (from file:///home/user/example)
- + ruff==0.5.0
-
-$ uv run ruff check
-All checks passed!
-
-$ uv lock
-Resolved 2 packages in 0.33ms
-
-$ uv sync
-Resolved 2 packages in 0.70ms
-Audited 1 package in 0.02ms
+```json
+{"installed":[["rich","14.3.3"]],"removed":[["rich","14.3.2"]]}
 ```
 
-See the [project documentation](https://docs.astral.sh/uv/guides/projects/) to get started.
+Returns the exit code. Safe to call from Go, C++, Rust, or any language with C FFI.
 
-uv also supports building and publishing projects, even if they're not managed with uv. See the
-[publish guide](https://docs.astral.sh/uv/guides/publish/) to learn more.
+---
 
-### Scripts
+## Isolated "Bubble" Installs (`--target`)
 
-uv manages dependencies and environments for single-file scripts.
+`uv-ffi` provides cache-safe isolated directory installs via `--target`. Standard `uv` evaluates `--target` against the host interpreter's installed packages, which can produce incorrect results and poisons in-memory state. `uv-ffi` routes `--target` installs through a pre-warmed `BUBBLE_ENVIRONMENT`:
 
-Create a new script and add inline metadata declaring its dependencies:
+- The resolver sees a clean slate — no existing packages, no cross-contamination
+- `SITE_PACKAGES_CACHE` (which reflects main env state) is never read or written during a bubble install
+- The `BUBBLE_INSTALL` atomic flag ensures the main env cache is fully protected for the duration
+- After the install, the flag is reset and the next main-env call proceeds normally
 
-```console
-$ echo 'import requests; print(requests.get("https://astral.sh"))' > example.py
-
-$ uv add --script example.py requests
-Updated `example.py`
+```python
+# Install into isolated dir — main env cache untouched
+rc, installed, _ = run(f'pip install --python {PY} --target /tmp/app_env flask==3.0.0')
 ```
 
-Then, run the script in an isolated virtual environment:
+This is how omnipkg generates multiversion isolated environments entirely in-memory.
 
-```console
-$ uv run example.py
-Reading inline script metadata from: example.py
-Installed 5 packages in 12ms
-<Response [200]>
+---
+
+## Cache Coherency
+
+uv-ffi holds site-packages state in RAM and trusts it completely. If an external tool (`uv`, `pip`, `conda`) modifies the environment without notifying uv-ffi, the next call may return `rc=0, inst=[], rem=[]` — a silent false no-op.
+
+Verified behavior:
+```
+[1] uv-ffi swap:                   6.51ms  installed=[('rich','14.3.3')] removed=[('rich','14.3.2')]
+[2] uv pip install rich==14.3.2:  18.65ms  (disk=14.3.2, cache still thinks 14.3.3)
+[3] uv-ffi ask for rich==14.3.3:   0.46ms  inst=[] rem=[]  ← silent no-op, wrong answer
+[4] uv-ffi ask for rich==14.3.2:  11.35ms  inst=[('rich','14.3.2')]  ← rescan + swap
 ```
 
-See the [scripts documentation](https://docs.astral.sh/uv/guides/scripts/) to get started.
+**If uv-ffi is the only thing modifying the environment, no action is needed.** After every install, the cache is updated directly from the resolver's in-memory changelog at zero disk I/O cost — it's always coherent with no overhead.
 
-### Tools
+For environments shared with external tools, two options:
 
-uv executes and installs command-line tools provided by Python packages, similar to `pipx`.
+**Option A — FS watcher + delta patch** (omnipkg's approach)
+Watch site-packages for filesystem events. On each change, call `patch_site_packages_cache(installed, removed)`. Cost: ~25µs per patch. Full coherency at near-zero overhead.
 
-Run a tool in an ephemeral environment using `uvx` (an alias for `uv tool run`):
+**Option B — Force rescan**
+Call `invalidate_site_packages_cache()` before any call where external modification is possible. Cost: ~2.5ms on next call. Simple, no watcher needed.
 
-```console
-$ uvx pycowsay 'hello world!'
-Resolved 1 package in 167ms
-Installed 1 package in 9ms
- + pycowsay==0.0.0.2
-  """
+---
 
-  ------------
-< hello world! >
-  ------------
-   \   ^__^
-    \  (oo)\_______
-       (__)\       )\/\
-           ||----w |
-           ||     ||
-```
-
-Install a tool with `uv tool install`:
-
-```console
-$ uv tool install ruff
-Resolved 1 package in 6ms
-Installed 1 package in 2ms
- + ruff==0.5.0
-Installed 1 executable: ruff
-
-$ ruff --version
-ruff 0.5.0
-```
-
-See the [tools documentation](https://docs.astral.sh/uv/guides/tools/) to get started.
-
-### Python versions
-
-uv installs Python and allows quickly switching between versions.
-
-Install multiple Python versions:
-
-```console
-$ uv python install 3.12 3.13 3.14
-Installed 3 versions in 972ms
- + cpython-3.12.12-macos-aarch64-none (python3.12)
- + cpython-3.13.9-macos-aarch64-none (python3.13)
- + cpython-3.14.0-macos-aarch64-none (python3.14)
+## Architecture
 
 ```
-
-Download Python versions as needed:
-
-```console
-$ uv venv --python 3.12.0
-Using Python 3.12.0
-Creating virtual environment at: .venv
-Activate with: source .venv/bin/activate
-
-$ uv run --python pypy@3.8 -- python --version
-Python 3.8.16 (a9dbdca6fc3286b0addd2240f11d97d8e8de187a, Dec 29 2022, 11:45:30)
-[PyPy 7.3.11 with GCC Apple LLVM 13.1.6 (clang-1316.0.21.2.5)] on darwin
-Type "help", "copyright", "credits" or "license" for more information.
->>>>
+Python API  →  run() / patch_site_packages_cache() / get_site_packages_cache()
+C ABI       →  omnipkg_uv_run_c() → JSON changelog
+Fast path   →  try_parse_ffi_install() → run_pip_install_direct() [bypasses clap entirely]
+Slow path   →  clap parse → uv::run() [pip freeze, uninstall, etc.]
+Globals     →  ENGINE / BUBBLE_ENVIRONMENT / SITE_PACKAGES_CACHE / REGISTRY_CLIENT / PYTHON_ENVIRONMENT
 ```
 
-Use a specific Python version in the current directory:
+**Persistent `UvEngine` singleton**
+Interpreter discovery, platform tagging, cache init, and TLS pool setup happen once at import time and are held in a `OnceLock`. All subsequent calls skip directly to resolution. Includes a pre-warmed `BUBBLE_ENVIRONMENT` for `--target` installs.
 
-```console
-$ uv python pin 3.11
-Pinned `.python-version` to `3.11`
+**Zero-clap fast path**
+`pip install` commands are parsed directly via `try_parse_ffi_install()` — a hand-written token parser covering all flags omnipkg uses. Internal Rust structs are constructed directly, skipping clap entirely (~2ms saved per call). Unrecognized flags fall back to clap automatically.
+
+**Persistent `RegistryClient` and `PythonEnvironment`**
+The HTTP client (TLS pools, connection pools) and Python environment (interpreter metadata, marker environment) are stored as global singletons after first use. Subsequent calls reuse them directly — no socket teardown, no filesystem search.
+
+**Zero-disk post-install cache update**
+After a successful install, `SITE_PACKAGES_CACHE` is updated directly from the resolver's changelog using in-memory `InstalledRegistryDist` construction. No dist-info directory scan, no `try_from_path` I/O. Post-install cache update cost: **0.0ms**.
+
+**`SitePackages::add_dist()`**
+A new method added to `uv-installer`'s `SitePackages` that surgically inserts a distribution into the in-memory index without touching disk. Used by both the post-install zero-disk update and `patch_site_packages_cache()`.
+
+**Idempotent initialization**
+Logging setup (`setup_logging`) and `miette::set_hook` are now called with `let _ =` — safe to call repeatedly in a long-running process without double-init panics.
+
+**Persistent Tokio runtime**
+The `main()` path previously created a new Tokio runtime on every call and called `shutdown_background()` on exit (leaving pending HTTP requests). The runtime is now stored in a `OnceLock` and reused across calls — no teardown overhead, no leaked requests.
+
+---
+
+## Profiling
+
+Set `UV_FFI_PROFILE=1` to enable millisecond-precision phase tracing:
+
+```
+[UV-PROFILE] cache-reused: 0.12ms
+[UV-PROFILE] post-site-packages-scan: 0.08ms (cached)
+[UV-PROFILE] post-settings-resolve: 0.31ms
+[UV-PROFILE] post-execute-plan: 4.82ms
+[UV-PROFILE] post-changelog-from-local: 4.83ms
+[UV-PROFILE] post-changelog-write: 4.91ms
+[UV-SYNC] Zero-disk cache update: done
+[UV-PROFILE] post-explicit-drop: 0.02ms
+[UV-PROFILE] post-await: 5.14ms
 ```
 
-See the [Python installation documentation](https://docs.astral.sh/uv/guides/install-python/) to get
-started.
+---
 
-### The pip interface
+## Coexistence with vanilla uv
 
-uv provides a drop-in replacement for common `pip`, `pip-tools`, and `virtualenv` commands.
+uv-ffi installs are fully compatible with vanilla `uv` operations in the same environment. uv-ffi writes complete dist-info including `RECORD`, `INSTALLER`, and `REQUESTED` — so `uv pip uninstall`, `uv pip install`, and other standard toolchain operations work correctly on packages uv-ffi installed.
 
-uv extends their interfaces with advanced features, such as dependency version overrides,
-platform-independent resolutions, reproducible resolutions, alternative resolution strategies, and
-more.
+Coexistence means no corruption, not automatic cache synchronization — see cache coherency section above.
 
-Migrate to uv without changing your existing workflows — and experience a 10-100x speedup — with the
-`uv pip` interface.
+---
 
-Compile requirements into a platform-independent requirements file:
+## Platform Support
 
-```console
-$ uv pip compile docs/requirements.in \
-   --universal \
-   --output-file docs/requirements.txt
-Resolved 43 packages in 12ms
-```
+| Platform | Architectures | Python |
+|:--|:--|:--|
+| Linux glibc ≥ 2.17 | x86_64, i686, aarch64, armv7, ppc64le, s390x | 3.10–3.14 |
+| Linux musl ≥ 1.2 | x86_64, i686, aarch64, armv7, ppc64le | 3.10–3.14 |
+| Linux glibc ≥ 2.31 | riscv64 | 3.10–3.14 |
+| macOS (universal2) | x86_64 + arm64 | 3.8–3.14 |
+| Windows x64 | x86_64 | 3.8–3.14 |
+| Windows ARM64 | aarch64 | 3.11–3.14 |
+| Windows x86 | i686 | 3.8–3.14 |
 
-Create a virtual environment:
+---
 
-```console
-$ uv venv
-Using Python 3.12.3
-Creating virtual environment at: .venv
-Activate with: source .venv/bin/activate
-```
+## Version Correspondence
 
-Install the locked requirements:
+uv-ffi versions track the upstream uv release they are built against.
 
-```console
-$ uv pip sync docs/requirements.txt
-Resolved 43 packages in 11ms
-Installed 43 packages in 208ms
- + babel==2.15.0
- + black==24.4.2
- + certifi==2024.7.4
- ...
-```
+| uv-ffi | uv upstream | Notes |
+|:--|:--|:--|
+| 0.10.8 | 0.10.8 | Initial release |
+| 0.10.8.post1 | 0.10.8 | Persistent `UvEngine`, delta cache patching, zero-clap fast path, verified uv coexistence |
+| 0.10.8.post2 | 0.10.8 | Windows cache path fix (`%LOCALAPPDATA%`), platform-safe temp dir fallback |
+| 0.10.8.post3 | 0.10.8 | Windows ARM64 wheels, Tokio `PathError` fix on Windows runners |
+| 0.10.8.post4 | 0.10.8 | Bubble environments (`--target` isolation), persistent `RegistryClient` + `PythonEnvironment`, zero-disk post-install cache update, JSON C ABI |
+| 0.10.8.post5 | 0.10.8 | CI hardening, per-platform PyPI checks, sdist publishing, Windows PowerShell fixes |
 
-See the [pip interface documentation](https://docs.astral.sh/uv/pip/index/) to get started.
+---
 
-## Contributing
+## Benchmark Methodology
 
-We are passionate about supporting contributors of all levels of experience and would love to see
-you get involved in the project. See the
-[contributing guide](https://github.com/astral-sh/uv?tab=contributing-ov-file#contributing) to get
-started.
+- In-process tests: 10-run alternating swap (`rich==14.3.2` ↔ `rich==14.3.3`) in a single warm Python session
+- Subprocess tests: 8 separate `subprocess.run` calls, new Python process each time
+- Interference test: uv subprocess between uv-ffi calls, 1s settle time
+- uv cache pre-warmed before all runs
+- Hardware: Linux, NVMe Gen4, Python 3.11.14
 
-## FAQ
+---
 
-#### How do you pronounce uv?
+## Attribution
 
-It's pronounced as "you - vee" ([`/juː viː/`](https://en.wikipedia.org/wiki/Help:IPA/English#Key))
+This crate links against uv source code from [astral-sh/uv](https://github.com/astral-sh/uv),
+copyright Astral Software Inc., used under the MIT License. See NOTICE for full attribution.
 
-#### How should I stylize uv?
-
-Just "uv", please. See the [style guide](./STYLE.md#styling-uv) for details.
-
-#### What platforms does uv support?
-
-See uv's [platform support](https://docs.astral.sh/uv/reference/platforms/) document.
-
-#### Is uv ready for production?
-
-Yes, uv is stable and widely used in production. See uv's
-[versioning policy](https://docs.astral.sh/uv/reference/versioning/) document for details.
-
-## Acknowledgements
-
-uv's dependency resolver uses [PubGrub](https://github.com/pubgrub-rs/pubgrub) under the hood. We're
-grateful to the PubGrub maintainers, especially [Jacob Finkelman](https://github.com/Eh2406), for
-their support.
-
-uv's Git implementation is based on [Cargo](https://github.com/rust-lang/cargo).
-
-Some of uv's optimizations are inspired by the great work we've seen in [pnpm](https://pnpm.io/),
-[Orogene](https://github.com/orogene/orogene), and [Bun](https://github.com/oven-sh/bun). We've also
-learned a lot from Nathaniel J. Smith's [Posy](https://github.com/njsmith/posy) and adapted its
-[trampoline](https://github.com/njsmith/posy/tree/main/src/trampolines/windows-trampolines/posy-trampoline)
-for Windows support.
-
-## License
-
-uv is licensed under either of
-
-- Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or
-  <https://www.apache.org/licenses/LICENSE-2.0>)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
-
-at your option.
-
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in uv
-by you, as defined in the Apache-2.0 license, shall be dually licensed as above, without any
-additional terms or conditions.
-
-<div align="center">
-  <a target="_blank" href="https://astral.sh" style="background:none">
-    <img src="https://raw.githubusercontent.com/astral-sh/uv/main/assets/svg/Astral.svg" alt="Made by Astral">
-  </a>
-</div>
+Not affiliated with, endorsed by, or sponsored by Astral Software Inc.
