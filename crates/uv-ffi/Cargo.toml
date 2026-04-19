@@ -4,45 +4,14 @@ version = "0.10.8"
 edition = "2021"
 description = "Persistent in-process execution engine for uv's package resolver — internal dependency of omnipkg"
 readme = "README.md"
-homepage = "https://github.com/1minds3t/omnipkg"
-repository = "https://github.com/1minds3t/omnipkg"
+homepage = "https://github.com/1minds3t/uv-ffi"
+repository = "https://github.com/1minds3t/uv-ffi"
+documentation = "https://github.com/1minds3t/uv-ffi#readme"
 license = "MIT"
-license-file = "LICENSE-MIT"
-keywords = ["uv", "packaging", "ffi", "pip", "omnipkg"]
-categories = ["development-tools"]
+authors = ["1minds3t"]
+keywords = ["uv", "packaging", "ffi", "resolver", "omnipkg"]
+categories = ["development-tools", "api-bindings"]
+exclude = ["/tests", "/.github"]
 # ATTRIBUTION: This crate links against uv source code from
 # https://github.com/astral-sh/uv (c) Astral Software Inc.
 # Used under the MIT License. See LICENSE-MIT in this repository.
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-pyo3 = { version = "0.21", features = ["extension-module"] }
-uv = { path = "../uv" }
-once_cell = "1"
-tokio            = { version = "1.40.0", features = ["rt", "rt-multi-thread", "macros"] }
-uv-cache         = { path = "../uv-cache" }
-uv-cli           = { path = "../uv-cli" }
-uv-client        = { path = "../uv-client" }
-uv-configuration = { path = "../uv-configuration" }
-uv-pep508        = { path = "../uv-pep508" }
-uv-requirements  = { path = "../uv-requirements" }
-uv-resolver      = { path = "../uv-resolver" }
-uv-workspace     = { path = "../uv-workspace" }
-uv-python        = { path = "../uv-python" }
-uv-normalize          = { path = "../uv-normalize" }
-uv-distribution-types = { path = "../uv-distribution-types" }
-uv-pep440             = { path = "../uv-pep440" }
-uv-settings      = { path = "../uv-settings" }
-uv-preview       = { path = "../uv-preview" }
-libc         = "0.2"
-os_pipe      = "1"
-tracing            = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
-clap = { version = "4.5.17", features = ["derive"] }
-uv-fs = { path = "../uv-fs" }
-uv-install-wheel = { path = "../uv-install-wheel" }
-anyhow = "1"
-dirs = "5"
-uv-platform-tags = { path = "../uv-platform-tags" }
