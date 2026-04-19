@@ -127,61 +127,79 @@ jobs:
           echo "Expected version: $EXPECTED_VER"
 
           find_run() {
+            # Check run inputs for matching tag — display_title never contains it
             local WF=$1
-            echo "  Scanning $WF for successful run with tag $TAG in inputs..." >&2
+            echo "  Scanning $WF for successful run with input tag=$TAG..." >&2
             local IDS
             IDS=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
               --jq ".workflow_runs[] | select(.conclusion == \"success\") | .id" 2>/dev/null)
             for RUN_ID in $IDS; do
-              RUN_TAG=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" \
-                --jq '.display_title // ""' 2>/dev/null)
-              echo "  run $RUN_ID title: $RUN_TAG" >&2
-              if echo "$RUN_TAG" | grep -qF "$TAG"; then
+              RUN_INPUT_TAG=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" \
+                --jq '.inputs.tag // ""' 2>/dev/null)
+              echo "  run $RUN_ID input.tag=$RUN_INPUT_TAG" >&2
+              if [ "$RUN_INPUT_TAG" = "$TAG" ]; then
                 echo "$RUN_ID"
                 return
               fi
             done
           }
-          
-          trigger_if_missing() {
+
+          dispatch_run() {
+            local WF=$1
+            local BEFORE
+            BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            echo "  $WF → dispatching on $BRANCH with tag=$TAG..." >&2
+            gh api "repos/${{ github.repository }}/actions/workflows/$WF/dispatches" \
+              -f ref="$BRANCH" \
+              -f inputs[tag]="$TAG"
+            echo "$BEFORE" > "/tmp/before_${WF//\//_}"
+          }
+
+          find_or_dispatch() {
             local WF=$1
             local ID
             ID=$(find_run "$WF")
             if [ -n "$ID" ] && [ "$ID" != "null" ]; then
-              echo "  $WF → existing run $ID" >&2
+              echo "  $WF → reusing existing run $ID" >&2
               echo "$ID" > "/tmp/run_id_${WF//\//_}"
             else
-              echo "  $WF → triggering on $BRANCH..." >&2
-              gh api "repos/${{ github.repository }}/actions/workflows/$WF/dispatches" \
-                -f ref="$BRANCH" \
-                -f inputs[tag]="$TAG"
-              local BEFORE
-              BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-              sleep 20
-              local NEW_ID ATTEMPTS=0
-              while true; do
-                NEW_ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=10" \
-                  --jq ".workflow_runs[] | select(.created_at > \"$BEFORE\") | .id" \
-                  2>/dev/null | head -1)
-                [ -n "$NEW_ID" ] && [ "$NEW_ID" != "null" ] && break
-                ATTEMPTS=$((ATTEMPTS+1))
-                echo "  waiting for run to appear... attempt $ATTEMPTS" >&2
-                [ $ATTEMPTS -gt 24 ] && { echo "❌ Could not find dispatched run for $WF" >&2; exit 1; }
-                sleep 10
-              done
-              echo "$NEW_ID" > "/tmp/run_id_${WF//\//_}"
-              echo "  $WF → dispatched run $NEW_ID" >&2
+              dispatch_run "$WF"
             fi
           }
-          
+
+          wait_for_dispatched() {
+            local WF=$1
+            # If already resolved (reused), skip
+            if [ -f "/tmp/run_id_${WF//\//_}" ]; then return; fi
+            local BEFORE
+            BEFORE=$(cat "/tmp/before_${WF//\//_}")
+            local NEW_ID ATTEMPTS=0
+            while true; do
+              NEW_ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=10" \
+                --jq ".workflow_runs[] | select(.created_at > \"$BEFORE\") | .id" \
+                2>/dev/null | head -1)
+              if [ -n "$NEW_ID" ] && [ "$NEW_ID" != "null" ]; then
+                echo "  $WF → dispatched run $NEW_ID" >&2
+                echo "$NEW_ID" > "/tmp/run_id_${WF//\//_}"
+                return
+              fi
+              ATTEMPTS=$((ATTEMPTS+1))
+              echo "  waiting for $WF run to appear... attempt $ATTEMPTS" >&2
+              [ $ATTEMPTS -gt 24 ] && { echo "❌ Could not find dispatched run for $WF" >&2; exit 1; }
+              sleep 10
+            done
+          }
+
           find_dispatched_run() {
             local WF=$1
             cat "/tmp/run_id_${WF//\//_}" 2>/dev/null
           }
-          
-          # Fire both dispatches before polling either
-          trigger_if_missing "build-wheels.yml"
-          trigger_if_missing "build-wheels-extended.yml"
+
+          # Check for existing then dispatch both before waiting on either
+          find_or_dispatch "build-wheels.yml"
+          find_or_dispatch "build-wheels-extended.yml"
+          wait_for_dispatched "build-wheels.yml"
+          wait_for_dispatched "build-wheels-extended.yml"
           
           wait_for_run() {
             local WF=$1
