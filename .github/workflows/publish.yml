@@ -11,7 +11,53 @@ on:
 permissions:
   contents: read
 jobs:
+  build-sdist:
+    name: "📦 Source Distribution"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Check PyPI for existing sdist
+        id: pypi_check
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.tag }}"
+          VERSION="${VERSION#v}"
+          if [ -z "$VERSION" ]; then
+            VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          fi
+          SDIST="uv_ffi-${VERSION}.tar.gz"
+          echo "Checking PyPI for $SDIST..."
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
+          if [ "$HTTP" != "200" ]; then
+            echo "Version $VERSION not on PyPI yet - building sdist"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          else
+            FOUND=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; print('found' if '${SDIST}' in files else 'missing')" 2>/dev/null)
+            if [ "$FOUND" = "found" ]; then
+              echo "sdist $SDIST already on PyPI - skipping"
+              echo "skip=true" >> $GITHUB_OUTPUT
+            else
+              echo "sdist $SDIST not on PyPI - building"
+              echo "skip=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+      - name: Build sdist
+        if: steps.pypi_check.outputs.skip == 'false'
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/uv-ffi
+          command: sdist
+          args: --out ${{ github.workspace }}/sdist/
+      - uses: actions/upload-artifact@v4
+        if: steps.pypi_check.outputs.skip == 'false'
+        with:
+          name: sdist
+          path: sdist/
+
   pypi-publish:
+    needs: build-sdist
     name: Upload release to PyPI
     runs-on: ubuntu-latest
     environment:
@@ -171,6 +217,13 @@ jobs:
         continue-on-error: true
         id: dl_ext
 
+      - name: Download sdist
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist/
+        continue-on-error: true
+
       - name: Check artifact results
         run: |
           STD_RUN="${{ steps.resolve.outputs.std_run_id }}"
@@ -178,9 +231,14 @@ jobs:
           echo "Standard run: $STD_RUN — $(ls dist/wheels-* 2>/dev/null | wc -l) artifact dirs"
           echo "Extended run: $EXT_RUN — $(ls dist/ext-wheels-* 2>/dev/null | wc -l) artifact dirs"
           TOTAL=$(find dist/ -name "*.whl" 2>/dev/null | wc -l)
+          SDIST=$(find dist/ -name "*.tar.gz" 2>/dev/null | wc -l)
           echo "Total wheels found: $TOTAL"
-          if [ "$TOTAL" = "0" ]; then
-            echo "All wheels already on PyPI - no new artifacts to upload. All builds skipped."
+          echo "Sdist found: $SDIST"
+          if [ "$SDIST" = "0" ]; then
+            echo "⚠️  No sdist found - sdist may already be on PyPI or build was skipped"
+          fi
+          if [ "$TOTAL" = "0" ] && [ "$SDIST" = "0" ]; then
+            echo "All artifacts already on PyPI - nothing to upload."
             echo "Check runs: https://github.com/${{ github.repository }}/actions/runs/$STD_RUN"
             echo "            https://github.com/${{ github.repository }}/actions/runs/$EXT_RUN"
             exit 1
