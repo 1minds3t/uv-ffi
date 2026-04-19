@@ -296,7 +296,7 @@ jobs:
           $pyver = "cp" + ("${{ matrix.python }}" -replace '\.', '')
           $wheel = "uv_ffi-${version}-${pyver}-${pyver}-win32.whl"
           Write-Host "Checking PyPI for $wheel..."
-          $files = (Invoke-RestMethod "https://pypi.org/pypi/uv-ffi/$version/json" -ErrorAction SilentlyContinue).urls.filename
+          try { $files = (Invoke-RestMethod "https://pypi.org/pypi/uv-ffi/$version/json").urls.filename } catch { $files = @() }
           if ($files -contains $wheel) {
             Write-Host "Wheel $wheel already on PyPI - skipping build"
             "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
