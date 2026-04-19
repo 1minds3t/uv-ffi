@@ -285,7 +285,7 @@ jobs:
           fi
           echo ""
           echo "Wheels to upload ($(ls dist/*.whl 2>/dev/null | wc -l) remaining):"
-          ls dist/*.whl 2>/dev/null || echo "  (none — all already on PyPI)"
+          ls dist/*.whl 2>/dev/null || true
 
       - name: Publish via OIDC (trusted publisher)
         id: oidc
