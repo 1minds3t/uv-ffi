@@ -73,9 +73,6 @@ jobs:
       - name: Build wheels (manylinux_2_17)
         if: steps.pypi_check.outputs.skip == 'false'
         uses: PyO3/maturin-action@v1
-        env:
-          CFLAGS_aarch64_unknown_linux_gnu: "-march=armv8-a"
-          CXXFLAGS_aarch64_unknown_linux_gnu: "-march=armv8-a"
         with:
           working-directory: crates/uv-ffi
           target: ${{ matrix.target }}
