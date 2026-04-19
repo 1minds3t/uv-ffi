@@ -77,6 +77,13 @@ jobs:
           working-directory: crates/uv-ffi
           target: ${{ matrix.target }}
           manylinux: "2_17"
+          before-script-linux: |
+            if command -v yum &>/dev/null; then
+              yum install -y gcc-s390x-linux-gnu binutils-s390x-linux-gnu 2>/dev/null || true
+            fi
+            if command -v apt-get &>/dev/null; then
+              apt-get install -y gcc-s390x-linux-gnu 2>/dev/null || true
+            fi
           args: --release --out ${{ github.workspace }}/wheels/ --interpreter python3.10 python3.11 python3.12 python3.13 python3.14
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
