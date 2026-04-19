@@ -106,7 +106,7 @@ jobs:
           find_run() {
             local WF=$1
             gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
-              --jq ".workflow_runs[] | select(.head_sha == \"$TAG_SHA\" and .conclusion == \"success\") | .id" \
+              --jq ".workflow_runs[] | select(.conclusion == \"success\") | .id" \
               2>/dev/null | head -1
           }
           
