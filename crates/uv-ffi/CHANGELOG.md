@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8.post5] — 2026-04-18
+
+Hardened CI Orchestration & Per-Platform PyPI Validation
+
+This release adds two runtime fixes to uv-ffi: automatic creation of the uv cache directory when missing (previously caused a panic on first run in clean environments), and restored Python-side version detection so importing uv_ffi and checking __version__ now returns the correct version string instead of failing silently.
+
+The bulk of commits in this release are CI/CD and wheel build pipeline improvements — per-platform PyPI existence checks, hardened multi-run artifact orchestration, sdist publishing, and Windows PowerShell compatibility fixes. These do not affect runtime behavior.
+
+---
+
+**Bug Fixes:**
+- fix: wheel failures non-fatal so sdist can still publish, remove duplicate function
+- fix: download sdist artifact, check completeness for both wheels and sdist
+- fix: increase dispatch run detection wait time and attempts
+- fix: platform-level PyPI check for jobs without python matrix
+- fix: ignore missing artifacts, fail only if truly no wheels found from either run
+- fix: per-wheel PyPI check for all extended platform jobs
+- fix: keep dots in wheel version tag
+- fix: use single quotes for powershell regex to avoid expansion conflict
+- fix: powershell pyver string concatenation syntax
+- fix: per-wheel PyPI check for all platforms instead of version-only check
+- fix: use passed tag for PyPI version check, fall back to pyproject.toml
+- fix: track dispatched run by timestamp to avoid version collision
+- fix: read version from pyproject.toml instead of Cargo.toml for PyPI check
+- fix: replace em-dashes with hyphens in PowerShell steps
+
+**Updates:**
+- Update publish.yml
+- Update publish.yml to find successful runs by tag SHA
+- Update GitHub Actions to handle multiple build runs
+- Update build-wheels-extended.yml
+- Update interpreter arguments for wheel builds
+- Update build-wheels.yml
+
+**Other Changes:**
+- Change shell from PowerShell to Bash for PyPI check
+- Fix indentation for PyPI check step in workflow
+- Improve PyPI check for existing wheel in workflow
+- Change shell to PowerShell for PyPI check
+- Fix syntax error in if condition for version check
+- ...and 21 more changes
+
+_4 files changed, 763 insertions(+), 66 deletions(-)_
+
 ## [0.10.8.post4] — 2026-04-12
 
 enforce target isolation for bubble installs and prevent cache poisoning
