@@ -119,12 +119,12 @@ jobs:
               echo "$ID" > "/tmp/run_id_${WF//\//_}"
             else
               echo "  $WF → triggering on $BRANCH..." >&2
-              local BEFORE
-              BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
               gh api "repos/${{ github.repository }}/actions/workflows/$WF/dispatches" \
                 -f ref="$BRANCH" \
                 -f inputs[tag]="$TAG"
-              sleep 15
+              local BEFORE
+              BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+              sleep 20
               local NEW_ID ATTEMPTS=0
               while true; do
                 NEW_ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=10" \

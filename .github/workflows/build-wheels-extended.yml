@@ -213,58 +213,6 @@ jobs:
           path: wheels/
           if-no-files-found: warn
 
-  build-linux-loongarch64:
-    name: "loongarch64 glibc 2.36"
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-        with:
-        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
-          ref: ${{ github.event.inputs.tag || github.ref }}
-      - name: Check PyPI for existing wheel
-        id: pypi_check
-        shell: bash
-        run: |
-          VERSION="${{ github.event.inputs.tag }}"
-          VERSION="${VERSION#v}"
-          if [ -z "$VERSION" ]; then
-            VERSION=$(grep -m1 '^version' crates/uv-ffi/pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-          fi
-          echo "Checking PyPI for any manylinux_2_36_loongarch64 wheels for $VERSION..."
-          PYPI_FILES=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]; matches=[f for f in files if 'loongarch64' in f]; print('found' if matches else 'missing')" 2>/dev/null)
-          if [[ "$PYPI_FILES" == found* ]]; then
-            echo "Wheels for loongarch64 already on PyPI - skipping build"
-            echo "skip=true" >> $GITHUB_OUTPUT
-          else
-            echo "Wheels for loongarch64 not on PyPI - proceeding"
-            echo "skip=false" >> $GITHUB_OUTPUT
-          fi
-          
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: all
-
-      - name: Build wheels (manylinux_2_36)
-        if: steps.pypi_check.outputs.skip == 'false'
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: crates/uv-ffi
-          target: loongarch64-unknown-linux-gnu
-          manylinux: "2_36"
-          args: --release --out ${{ github.workspace }}/wheels/ --interpreter python3.10 python3.11 python3.12 python3.13 python3.14
-        env:
-          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
-
-      - name: Upload wheels
-        if: steps.pypi_check.outputs.skip == 'false'
-        uses: actions/upload-artifact@v4
-        with:
-          name: "ext-wheels-linux-loongarch64"
-          path: wheels/
-          if-no-files-found: warn
-
   build-macos-universal2:
     name: "macOS universal2"
     runs-on: macos-latest
@@ -383,7 +331,6 @@ jobs:
       - build-linux-glibc-2_17
       - build-linux-musl
       - build-linux-riscv64
-      - build-linux-loongarch64
       - build-macos-universal2
       - build-windows-i686
     steps:
@@ -407,7 +354,6 @@ jobs:
           echo "  glibc-2_17  : ${{ needs.build-linux-glibc-2_17.result }}"
           echo "  musl        : ${{ needs.build-linux-musl.result }}"
           echo "  riscv64     : ${{ needs.build-linux-riscv64.result }}"
-          echo "  loongarch64 : ${{ needs.build-linux-loongarch64.result }}"
           echo "  macos-uni2  : ${{ needs.build-macos-universal2.result }}"
           echo "  windows-i686: ${{ needs.build-windows-i686.result }}"
 
