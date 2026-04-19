@@ -105,7 +105,7 @@ jobs:
           - aarch64
           - armv7
           - ppc64le
-          - s390x-unknown-linux-gnu
+          # s390x-unknown-linux-gnu excluded: Tier 3 musl target, not buildable without nightly + build-std
     steps:
       - uses: actions/checkout@v4
         with:
