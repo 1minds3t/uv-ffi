@@ -258,7 +258,7 @@ jobs:
             done
           done
           echo "Removing all pre-existing attestation files..."
-          find dist/ -name "*.attestation" -delete
+          find dist/ -name "*.attestation" -delete 2>/dev/null || true
           VERSION=$(ls dist/*.whl 2>/dev/null | head -1 | grep -oP '(?<=uv_ffi-)[^-]+')
           if [ -z "$VERSION" ]; then
             echo "No wheels left in dist/, nothing to do"
