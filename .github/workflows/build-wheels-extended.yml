@@ -55,9 +55,14 @@ jobs:
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Install s390x cross-compiler
-        if: contains(matrix.target, 's390x')
-        run: sudo apt-get install -y gcc-s390x-linux-gnu
+      - name: Install cross-compilers
+        run: |
+          if echo "${{ matrix.target }}" | grep -q 's390x'; then
+            sudo apt-get install -y gcc-s390x-linux-gnu
+          fi
+          if echo "${{ matrix.target }}" | grep -q 'aarch64'; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+          fi
 
       - name: Set up QEMU (cross targets)
         if: matrix.target != 'x86_64' && matrix.target != 'i686'
@@ -68,6 +73,9 @@ jobs:
       - name: Build wheels (manylinux_2_17)
         if: steps.pypi_check.outputs.skip == 'false'
         uses: PyO3/maturin-action@v1
+        env:
+          CFLAGS_aarch64_unknown_linux_gnu: "-march=armv8-a"
+          CXXFLAGS_aarch64_unknown_linux_gnu: "-march=armv8-a"
         with:
           working-directory: crates/uv-ffi
           target: ${{ matrix.target }}
