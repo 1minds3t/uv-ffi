@@ -265,7 +265,7 @@ jobs:
           echo "DEBUG: sdist count: $(find dist/ -name "*.tar.gz" 2>/dev/null | wc -l)"
           echo "DEBUG: VERSION=$(find dist/ -name "*.whl" 2>/dev/null | head -1 | grep -oP '(?<=uv_ffi-)[^-]+')"
           echo "DEBUG: next steps will check these counts"
-          VERSION=$(find dist/ -name "*.whl" 2>/dev/null | head -1 | grep -oP '(?<=uv_ffi-)[^-]+')
+          VERSION=$(find dist/ -name "*.whl" 2>/dev/null | head -1 | grep -oP '(?<=uv_ffi-)[^-]+' || true)
           if [ -z "$VERSION" ]; then
             VERSION=$(find dist/ -name "*.tar.gz" 2>/dev/null | head -1 | grep -oP '(?<=uv_ffi-)[^-]+')
           fi
