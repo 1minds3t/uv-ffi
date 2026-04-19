@@ -55,6 +55,10 @@ jobs:
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Install s390x cross-compiler
+        if: contains(matrix.target, 's390x')
+        run: sudo apt-get install -y gcc-s390x-linux-gnu
+
       - name: Set up QEMU (cross targets)
         if: matrix.target != 'x86_64' && matrix.target != 'i686'
         uses: docker/setup-qemu-action@v3
