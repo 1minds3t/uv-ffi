@@ -222,7 +222,7 @@ jobs:
           $vtag = $version
           $wheel = "uv_ffi-${vtag}-${pyver}-${pyver}-win_amd64.whl"
           Write-Host "Checking PyPI for $wheel..."
-          $response = Invoke-RestMethod "https://pypi.org/pypi/uv-ffi/$version/json" -ErrorAction SilentlyContinue
+          try { $response = Invoke-RestMethod "https://pypi.org/pypi/uv-ffi/$version/json" -ErrorAction Stop } catch { $response = $null }
           $files = if ($response) { $response.urls.filename } else { @() }
           if ($files -contains $wheel) {
             Write-Host "Wheel $wheel already on PyPI - skipping build"
@@ -282,7 +282,7 @@ jobs:
           $vtag = $version
           $wheel = "uv_ffi-${vtag}-${pyver}-${pyver}-win_arm64.whl"
           Write-Host "Checking PyPI for $wheel..."
-          $response = Invoke-RestMethod "https://pypi.org/pypi/uv-ffi/$version/json" -ErrorAction SilentlyContinue
+          try { $response = Invoke-RestMethod "https://pypi.org/pypi/uv-ffi/$version/json" -ErrorAction Stop } catch { $response = $null }
           $files = if ($response) { $response.urls.filename } else { @() }
           if ($files -contains $wheel) {
             Write-Host "Wheel $wheel already on PyPI - skipping build"
