@@ -406,7 +406,7 @@ fn build_fast_cli(opts: FfiInstallOpts) -> uv_cli::Cli {
     }
 }
 
-fn run_uv(cmd: &str) -> (i32, Option<Changelog>) {
+fn run_uv_internal(cmd: &str) -> (i32, Option<Changelog>) {
     static PROFILE_INIT: std::sync::Once = std::sync::Once::new();
     PROFILE_INIT.call_once(init_profile);
 
@@ -482,6 +482,33 @@ fn dist_entry(d: &ChangedDist) -> (String, String) {
 }
 /// Return the current in-memory site-packages state as a [(name, version)] list.
 /// Returns an empty list if the cache has not been populated yet.
+
+fn run_uv(cmd: &str) -> (i32, Option<Changelog>) {
+    let start = std::time::Instant::now();
+    let (rc, changelog) = run_uv_internal(cmd);
+    let elapsed = start.elapsed();
+
+    if rc == 0 {
+        return (rc, changelog);
+    }
+
+    // Heuristic: < 15ms failure on an install = likely stale RAM cache.
+    // Real network failures or dependency conflicts take much longer.
+    if elapsed.as_millis() < 15 && cmd.contains("install") {
+        if is_profile_enabled() {
+            eprintln!("[UV-FFI] Fast failure ({}ms). Suspecting stale cache. Auto-healing...", elapsed.as_millis());
+        }
+
+        if let Ok(mut g) = uv::REGISTRY_CLIENT.lock() {
+            *g = None;
+        }
+
+        return run_uv_internal(cmd);
+    }
+
+    // Slow failure or non-install command = real problem -> return to Python
+    (rc, changelog)
+}
 #[pyo3::pyfunction]
 fn get_site_packages_cache() -> Vec<(String, String)> {
     let Ok(guard) = uv::SITE_PACKAGES_CACHE.try_lock() else {
@@ -586,12 +613,20 @@ fn patch_site_packages_cache(
     true
 }
 
+#[pyo3::pyfunction]
+fn clear_registry_cache() {
+    if let Ok(mut g) = uv::REGISTRY_CLIENT.lock() {
+        *g = None;
+    }
+}
+
 #[pyo3::pymodule]
 fn uv_ffi(_py: pyo3::Python, m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(run, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(invalidate_site_packages_cache, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(patch_site_packages_cache, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(get_site_packages_cache, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(clear_registry_cache, m)?)?;
     Ok(())
 }
 
