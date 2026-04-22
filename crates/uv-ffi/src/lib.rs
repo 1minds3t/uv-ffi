@@ -463,14 +463,18 @@ fn run_uv_internal(cmd: &str) -> (i32, Option<Changelog>, String) {
     };
 
     let _t_run = std::time::Instant::now();
-    let rc = match RUNTIME.block_on(Box::pin(uv::run(cli))) {
-        Ok(_)  => 0,
-        Err(e) => { eprintln!("[UV-FFI] error: {:?}", e); 1 },
+    let res = RUNTIME.block_on(Box::pin(uv::run(cli)));
+    let (rc, slow_err) = match res {
+        Ok(uv::commands::ExitStatus::Success) => (0, String::new()),
+        Ok(uv::commands::ExitStatus::Failure) => (1, "resolution or install error".to_string()),
+        Ok(uv::commands::ExitStatus::Error) => (1, "internal uv error".to_string()),
+        Ok(uv::commands::ExitStatus::External(code)) => (1, format!("external process exited with code {}", code)),
+        Err(e) => (1, format!("{:?}", e)),
     };
     prof!("post-await", _t_run);
 
     let changelog = uv::INSTALL_CHANGELOG.lock().ok().and_then(|mut g| g.take());
-    (rc, changelog, String::new())
+    (rc, changelog, slow_err)
 }
 
 fn dist_entry(d: &ChangedDist) -> (String, String) {
@@ -484,19 +488,17 @@ fn dist_entry(d: &ChangedDist) -> (String, String) {
 /// Returns an empty list if the cache has not been populated yet.
 
 fn run_uv(cmd: &str) -> (i32, Option<Changelog>, String) {
-    let start = std::time::Instant::now();
     let (rc, changelog, err) = run_uv_internal(cmd);
-    let elapsed = start.elapsed();
 
     if rc == 0 {
-        return (rc, changelog, String::new());
+        return (rc, changelog, err);
     }
 
-    // Heuristic: < 15ms failure on an install = likely stale RAM cache.
-    // Real network failures or dependency conflicts take much longer.
-    if elapsed.as_millis() < 15 && cmd.contains("install") {
+    // AGGRESSIVE HEAL: If any install fails, the registry might be stale.
+    // We retry EXACTLY once after clearing the cache.
+    if cmd.contains("install") {
         if is_profile_enabled() {
-            eprintln!("[UV-FFI] Fast failure ({}ms). Suspecting stale cache. Auto-healing...", elapsed.as_millis());
+            eprintln!("[UV-FFI] Install failed (rc={}). Forcing registry reset and retrying...", rc);
         }
 
         if let Ok(mut g) = uv::REGISTRY_CLIENT.lock() {
@@ -506,9 +508,9 @@ fn run_uv(cmd: &str) -> (i32, Option<Changelog>, String) {
         return run_uv_internal(cmd);
     }
 
-    // Slow failure or non-install command = real problem -> return to Python
     (rc, changelog, err)
 }
+
 #[pyo3::pyfunction]
 fn get_site_packages_cache() -> Vec<(String, String)> {
     let Ok(guard) = uv::SITE_PACKAGES_CACHE.try_lock() else {
