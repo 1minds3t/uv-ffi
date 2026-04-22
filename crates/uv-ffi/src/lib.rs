@@ -406,7 +406,7 @@ fn build_fast_cli(opts: FfiInstallOpts) -> uv_cli::Cli {
     }
 }
 
-fn run_uv_internal(cmd: &str) -> (i32, Option<Changelog>) {
+fn run_uv_internal(cmd: &str) -> (i32, Option<Changelog>, String) {
     static PROFILE_INIT: std::sync::Once = std::sync::Once::new();
     PROFILE_INIT.call_once(init_profile);
 
@@ -432,8 +432,8 @@ fn run_uv_internal(cmd: &str) -> (i32, Option<Changelog>) {
             prof!("post-block_on", _t_blockon);
             prof!("post-run_uv (engine)", _t);
             return match result {
-                Ok(cl)  => (0, Some(cl)),
-                Err(e)  => { eprintln!("[UV-FFI] error: {:?}", e); (1, None) },
+                Ok(cl)  => (0, Some(cl), String::new()),
+                Err(e)  => { let msg = format!("{:?}", e); eprintln!("[UV-FFI] error: {}", msg); (1, None, msg) },
             };
         }
     }
@@ -458,19 +458,19 @@ fn run_uv_internal(cmd: &str) -> (i32, Option<Changelog>) {
             .collect();
         match uv_cli::Cli::try_parse_from(&args) {
             Ok(c)  => { prof!("clap-parse (slow)", _t_parse); c }
-            Err(_) => return (1, None),
+            Err(e) => return (1, None, format!("clap parse error: {}", e)),
         }
     };
 
     let _t_run = std::time::Instant::now();
     let rc = match RUNTIME.block_on(Box::pin(uv::run(cli))) {
         Ok(_)  => 0,
-        Err(_) => 1,
+        Err(e) => { eprintln!("[UV-FFI] error: {:?}", e); 1 },
     };
     prof!("post-await", _t_run);
 
     let changelog = uv::INSTALL_CHANGELOG.lock().ok().and_then(|mut g| g.take());
-    (rc, changelog)
+    (rc, changelog, String::new())
 }
 
 fn dist_entry(d: &ChangedDist) -> (String, String) {
@@ -483,13 +483,13 @@ fn dist_entry(d: &ChangedDist) -> (String, String) {
 /// Return the current in-memory site-packages state as a [(name, version)] list.
 /// Returns an empty list if the cache has not been populated yet.
 
-fn run_uv(cmd: &str) -> (i32, Option<Changelog>) {
+fn run_uv(cmd: &str) -> (i32, Option<Changelog>, String) {
     let start = std::time::Instant::now();
-    let (rc, changelog) = run_uv_internal(cmd);
+    let (rc, changelog, err) = run_uv_internal(cmd);
     let elapsed = start.elapsed();
 
     if rc == 0 {
-        return (rc, changelog);
+        return (rc, changelog, String::new());
     }
 
     // Heuristic: < 15ms failure on an install = likely stale RAM cache.
@@ -507,7 +507,7 @@ fn run_uv(cmd: &str) -> (i32, Option<Changelog>) {
     }
 
     // Slow failure or non-install command = real problem -> return to Python
-    (rc, changelog)
+    (rc, changelog, err)
 }
 #[pyo3::pyfunction]
 fn get_site_packages_cache() -> Vec<(String, String)> {
@@ -523,16 +523,17 @@ fn get_site_packages_cache() -> Vec<(String, String)> {
 }
 
 #[pyo3::pyfunction]
-fn run(cmd: &str) -> pyo3::PyResult<(i32, Vec<(String, String)>, Vec<(String, String)>)> {
+fn run(cmd: &str) -> pyo3::PyResult<(i32, Vec<(String, String)>, Vec<(String, String)>, String)> {
     let _t = std::time::Instant::now();
-    let (rc, changelog) = run_uv(cmd);
+    let (rc, changelog, err) = run_uv(cmd);
     prof!("post-run_uv", _t);
     match changelog {
         Some(cl) => Ok((rc,
             cl.installed.iter().map(dist_entry).collect(),
             cl.uninstalled.iter().map(dist_entry).collect(),
+            err,
         )),
-        None => Ok((rc, vec![], vec![])),
+        None => Ok((rc, vec![], vec![], err)),
     }
 }
 
@@ -638,7 +639,7 @@ pub extern "C" fn omnipkg_uv_run_c(
 ) -> std::os::raw::c_int {
     let c_str = unsafe { std::ffi::CStr::from_ptr(cmd_ptr) };
     let cmd = c_str.to_str().unwrap_or("");
-    let (rc, changelog) = run_uv(cmd);
+    let (rc, changelog, _err) = run_uv(cmd);
 
     let mut res = String::with_capacity(128);
     res.push_str("{\"installed\":[");
