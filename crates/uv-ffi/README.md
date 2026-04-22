@@ -11,7 +11,7 @@ Used internally by [omnipkg](https://github.com/1minds3t/omnipkg), but directly 
 ## Usage
 
 ```python
-from uv_ffi import run, invalidate_site_packages_cache, patch_site_packages_cache, get_site_packages_cache
+from uv_ffi import run, invalidate_site_packages_cache, patch_site_packages_cache, get_site_packages_cache, clear_registry_cache
 
 PY = '/path/to/your/python'
 BASE = f'pip install --python {PY} --link-mode symlink'
@@ -107,6 +107,11 @@ patch_site_packages_cache(
 )
 ```
 
+
+### `clear_registry_cache()`
+
+Drops the persistent `RegistryClient` memory cache. Use this if you suspect the internal PyPI Simple API cache is stale. Note: The engine already auto-heals on install failures, so manual invocation is rarely needed.
+
 ### C ABI: `omnipkg_uv_run_c`
 
 ```c
@@ -183,6 +188,10 @@ Interpreter discovery, platform tagging, cache init, and TLS pool setup happen o
 
 **Persistent `RegistryClient` and `PythonEnvironment`**
 The HTTP client (TLS pools, connection pools) and Python environment (interpreter metadata, marker environment) are stored as global singletons after first use. Subsequent calls reuse them directly — no socket teardown, no filesystem search.
+
+
+**PyPI Registry Auto-Healing**
+The FFI engine keeps PyPI API responses in RAM for maximum speed. If a newly published package version is requested and not found in the RAM cache, the engine detects the internal failure, automatically drops its registry cache, and retries the network fetch transparently. You never need to restart the process to see newly published packages.
 
 **Zero-disk post-install cache update**
 After a successful install, `SITE_PACKAGES_CACHE` is updated directly from the resolver's changelog using in-memory `InstalledRegistryDist` construction. No dist-info directory scan, no `try_from_path` I/O. Post-install cache update cost: **0.0ms**.
