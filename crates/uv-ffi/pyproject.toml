@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "uv-ffi"
-version = "0.10.8.post5"
+version = "0.10.8.post6"
 description = "Persistent in-process execution engine for uv — internal dependency of omnipkg"
 readme = "README.md"
 requires-python = ">=3.8"

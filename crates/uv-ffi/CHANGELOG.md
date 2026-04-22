@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8.post6] — 2026-04-22
+
+The Auto-Healing & Transparent Errors Release
+
+This release makes the persistent `uv-ffi` engine entirely self-contained, auto-healing, and transparent to the Python caller.
+
+- **Aggressive Registry Auto-Healing:** The persistent PyPI Simple API cache now self-corrects. If the engine fails to find a newly published package (e.g., `torch==2.11.0` dropped 5 minutes ago) due to a stale RAM cache, it instantly detects the failure, drops its registry, and transparently retries the network fetch. Zero false-negatives, zero process restarts required.
+- **Detailed FFI Error Surfacing:** `uv_ffi.run()` now returns a 4-tuple: `(rc, installed, removed, err_msg)`. Real error strings from `uv`'s internal resolution (e.g., "No matching distribution found") are captured and passed directly to Python. No more guessing why `rc=1` happened.
+- **Manual Cache Control:** Exposed `clear_registry_cache()` to Python as an escape hatch / debugging tool.
+- **Strict ExitStatus Mapping:** Fixed a bug where slow-path resolutions falsely returned `rc=0` on failure. The engine now strictly adheres to `uv::commands::ExitStatus`.
+- **Restored CDYLIB Build:** Fixed `Cargo.toml` to ensure PyO3 builds the extension module cleanly out-of-the-box.
+
+---
+
+**Bug Fixes:**
+- fix: use thin LTO for manylinux i686 to avoid 32-bit OOM
+- fix: remove s390x from musl matrix (Tier 3 target, not buildable)
+- fix: install all cross-compilers on host runner before maturin build
+- fix: install s390x cross-compiler inside maturin container via before-script
+- fix: remove duplicate env block
+- fix: add aarch64 CFLAGS for ring crate assembly, install cross-compilers
+- fix: install s390x cross-compiler for glibc build
+- fix: pass $TAG shell var to dispatch instead of step output
+- fix: use try/catch for powershell PyPI check to handle 404
+- fix: handle 404 in powershell PyPI check gracefully
+
+**Updates:**
+- Update build-wheels-extended.yml
+
+**Other Changes:**
+- docs: document PyPI registry auto-healing and clear_registry_cache API
+- fix(uv-ffi): implement aggressive auto-heal and strict ExitStatus mapping
+- feat(uv-ffi): expose detailed error messages to Python caller
+- feat(uv-ffi): implement self-healing registry cache and restore cdylib build config
+- Add GitHub Actions workflow for static content deployment
+- ...and 10 more changes
+
+_10 files changed, 763 insertions(+), 444 deletions(-)_
+
 ## [0.10.8.post5] — 2026-04-18
 
 Hardened CI Orchestration & Per-Platform PyPI Validation
