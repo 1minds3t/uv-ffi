@@ -185,7 +185,7 @@ jobs:
               fi
               ATTEMPTS=$((ATTEMPTS+1))
               echo "  waiting for $WF run to appear... attempt $ATTEMPTS" >&2
-              [ $ATTEMPTS -gt 24 ] && { echo "❌ Could not find dispatched run for $WF" >&2; exit 1; }
+              [ $ATTEMPTS -gt 60 ] && { echo "❌ Could not find dispatched run for $WF" >&2; exit 1; }
               sleep 10
             done
           }
