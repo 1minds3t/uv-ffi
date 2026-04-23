@@ -406,74 +406,95 @@ jobs:
         with:
           ref: gh-pages
 
-      - name: Regenerate PEP 503 index from all GH Release assets
+      - name: Regenerate PEP 503 index
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           python3 - <<'EOF'
-          import os, json, urllib.request, urllib.error
+          import os, json, urllib.request
 
           repo = os.environ["REPO"]
           token = os.environ["GH_TOKEN"]
 
           def gh(url):
               req = urllib.request.Request(
-                  url,
-                  headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
-              )
+                  url, headers={"Authorization": f"token {token}",
+                  "Accept": "application/vnd.github+json"})
               return json.loads(urllib.request.urlopen(req).read())
 
-          # Paginate releases
-          wheels = []
+          def pypi(pkg):
+              try:
+                  req = urllib.request.Request(f"https://pypi.org/pypi/{pkg}/json")
+                  data = json.loads(urllib.request.urlopen(req).read())
+                  out = []
+                  for ver, files in data["releases"].items():
+                      for f in files:
+                          if f["filename"].endswith(".whl"):
+                              out.append((ver, f["filename"], f["url"]))
+                  return out
+              except Exception as e:
+                  print(f"PyPI fetch failed: {e}")
+                  return []
+
+          # GH Release exotic wheels
+          gh_wheels = []
           page = 1
           while True:
               releases = gh(f"https://api.github.com/repos/{repo}/releases?per_page=50&page={page}")
               if not releases:
                   break
               for rel in releases:
-                  tag = rel["tag_name"]
                   for asset in rel.get("assets", []):
                       if asset["name"].endswith(".whl"):
-                          wheels.append((tag, asset["name"], asset["browser_download_url"]))
+                          gh_wheels.append((rel["tag_name"], asset["name"], asset["browser_download_url"]))
               page += 1
 
-          wheels.sort(key=lambda x: (x[0], x[1]))
+          # PyPI mainstream wheels
+          pypi_wheels = pypi("uv-ffi")
+
+          # Deduplicate by filename — GH Release wins if same name exists both places
+          seen = {}
+          for tag, name, url in pypi_wheels:
+              seen[name] = (tag, name, url)
+          for tag, name, url in gh_wheels:
+              seen[name] = (tag, name, url)  # GH overrides
+
+          all_wheels = sorted(seen.values(), key=lambda x: (x[0], x[1]))
 
           os.makedirs("uv-ffi", exist_ok=True)
 
-          # Per-package index (PEP 503)
           links = "\n".join(
-              f'<a href="{url}" data-requires-python=">=3.8">{name}</a>'
-              for _, name, url in wheels
+              f'  <a href="{url}" data-requires-python=">=3.8">{name}</a><br>'
+              for _, name, url in all_wheels
           )
+
           with open("uv-ffi/index.html", "w") as f:
               f.write(f"""<!DOCTYPE html>
-          <html>
-            <head><title>Links for uv-ffi</title></head>
-            <body>
-              <h1>Links for uv-ffi</h1>
-          {links}
-            </body>
-          </html>
-          """)
+              <html>
+                <head><title>Links for uv-ffi</title></head>
+                <body>
+                  <h1>Links for uv-ffi</h1>
+              {links}
+                </body>
+              </html>
+              """)
+              
+                        with open("index.html", "w") as f:
+                            f.write(f"""<!DOCTYPE html>
+              <html>
+                <head><title>uv-ffi wheel index</title></head>
+                <body>
+                  <h1>uv-ffi wheel index</h1>
+                  <p>Mainstream wheels: <a href="https://pypi.org/project/uv-ffi/">PyPI</a></p>
+                  <p>Exotic platform wheels hosted here. Install any platform:</p>
+                  <pre>pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/</pre>
+                  <p><a href="uv-ffi/">Browse all {len(all_wheels)} wheels →</a></p>
+                </body>
+              </html>
+              """)
 
-          # Root index
-          with open("index.html", "w") as f:
-              f.write("""<!DOCTYPE html>
-          <html>
-            <head><title>uv-ffi wheel index</title></head>
-            <body>
-              <h1>uv-ffi exotic wheel index</h1>
-              <p>Mainstream wheels are on <a href="https://pypi.org/project/uv-ffi/">PyPI</a>.</p>
-              <p>Exotic/extended platform wheels are hosted here:</p>
-              <pre>pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/</pre>
-              <a href="uv-ffi/">uv-ffi</a>
-            </body>
-          </html>
-          """)
-
-          print(f"Indexed {len(wheels)} exotic wheels across {len(set(t for t,_,_ in wheels))} releases")
+          print(f"Indexed {len(all_wheels)} total wheels ({len(pypi_wheels)} PyPI + {len(gh_wheels)} GH Releases)")
           EOF
 
       - name: Commit and push index
