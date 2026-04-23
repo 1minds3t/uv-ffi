@@ -25,18 +25,16 @@ This release completely overhauls the developer experience (DX) for users on "ex
 
 ---
 
+**📚 Documentation:**
+- crates/uv-ffi/CHANGELOG.md (33 lines)
+
+**⚙️ Configuration:**
+- crates/uv-ffi/pyproject.toml (9 lines)
+
 **Updates:**
 - Update HTML writing logic in backfill_wheels.yml
 
-**Other Changes:**
-- feat(uv-ffi): post8 — build hint, __init__ error msg, extended wheels index, README overhaul
-- Refactor artifact collection in backfill_wheels.yml
-- Refactor artifact download process in workflow
-- Enhance backfill_wheels workflow with SHA-to-tag mapping
-- Add backfill workflow for wheels to GH Releases
-- ...and 4 more changes
-
-_7 files changed, 566 insertions(+), 331 deletions(-)_
+_8 files changed, 600 insertions(+), 332 deletions(-)_
 
 ## [0.10.8.post7] — 2026-04-22
 
