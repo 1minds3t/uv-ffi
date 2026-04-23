@@ -1,14 +1,13 @@
 name: "🔧 Build uv-ffi Wheels (Extended)"
 
 on:
-  release:
-    types: [published]
+  # NO release trigger — publish.yml dispatches this
   workflow_dispatch:
     inputs:
-        tag:
-          description: 'Tag to build (e.g. v0.10.7)'
-          required: false
-          default: ''
+      tag:
+        description: 'Tag to build (e.g. v0.10.7)'
+        required: false
+        default: ''
 
 jobs:
   build-linux-glibc-2_17:
@@ -28,7 +27,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
           ref: ${{ github.event.inputs.tag || github.ref }}
       - name: Cache Rust dependencies
         uses: swatinem/rust-cache@v2
@@ -106,12 +104,11 @@ jobs:
           - aarch64
           - armv7
           - ppc64le
-          # s390x-unknown-linux-gnu excluded: Tier 3 musl target, not buildable without nightly + build-std
     steps:
       - uses: actions/checkout@v4
         with:
-        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
           ref: ${{ github.event.inputs.tag || github.ref }}
+
       - name: Check PyPI for existing wheel
         id: pypi_check
         shell: bash
@@ -133,7 +130,7 @@ jobs:
             echo "Wheels for musllinux_1_2_${TARGET} not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
-          
+
       - name: Set up QEMU (cross targets)
         if: matrix.target != 'x86_64' && matrix.target != 'i686'
         uses: docker/setup-qemu-action@v3
@@ -168,8 +165,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
           ref: ${{ github.event.inputs.tag || github.ref }}
+
       - name: Check PyPI for existing wheel
         id: pypi_check
         shell: bash
@@ -188,7 +185,7 @@ jobs:
             echo "Wheels for riscv64 not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
-          
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
@@ -214,7 +211,7 @@ jobs:
           if-no-files-found: warn
 
   build-macos-universal2:
-    name: "macOS universal2"
+    name: "macOS universal2 • py${{ matrix.python }}"
     runs-on: macos-latest
     continue-on-error: true
     strategy:
@@ -224,8 +221,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
-          ref: ${{ github.event.inputs.tag || github.ref }} 
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
       - name: Check PyPI for existing wheel
         id: pypi_check
         shell: bash
@@ -246,7 +243,7 @@ jobs:
             echo "Wheel $WHEEL not on PyPI - proceeding"
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
-          
+
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -280,8 +277,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-        # Logic: Use the input tag if provided, otherwise use the event ref (the release tag)
-          ref: ${{ github.event.inputs.tag || github.ref }} 
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
