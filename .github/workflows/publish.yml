@@ -296,6 +296,14 @@ jobs:
           for f in dist/*.whl dist/*.tar.gz; do
             [ -f "$f" ] || continue
             name=$(basename "$f")
+            # Skip non-abi3 CPython, PyPy, GraalPy, freethreaded, non-universal2 mac
+            case "$name" in
+              *-pp[0-9]*) cp "$f" dist-ghrelease/; continue ;;
+              *-graalpy*) cp "$f" dist-ghrelease/; continue ;;
+              *-cp313t-*) cp "$f" dist-ghrelease/; continue ;;
+              *-cp3[0-9][0-9]-cp3[0-9][0-9]-*) cp "$f" dist-ghrelease/; continue ;;
+            esac
+            # Only abi3 wheels reach here — apply platform filter
             matched=false
             for pat in "${PYPI_KEEP[@]}"; do
               case "$name" in
