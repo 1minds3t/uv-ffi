@@ -136,6 +136,43 @@ jobs:
           # Map: tag → [artifact_ids]
           tag_artifacts = {}  # tag → list of (artifact_id, artifact_name)
 
+          # Build SHA→tag map from all releases for release-triggered runs
+          print("Building SHA->tag map from releases...")
+          sha_to_tag = {}
+          rpage = 1
+          while True:
+              rels = gh(f"https://api.github.com/repos/{repo}/releases?per_page=50&page={rpage}")
+              if not rels:
+                  break
+              for rel in rels:
+                  t = rel["tag_name"]
+                  ref = gh(f"https://api.github.com/repos/{repo}/git/ref/tags/{t}")
+                  if not ref:
+                      continue
+                  obj = ref.get("object", {})
+                  sha = obj.get("sha", "")
+                  if obj.get("type") == "tag":
+                      tag_obj = gh(f"https://api.github.com/repos/{repo}/git/tags/{sha}")
+                      if tag_obj:
+                          sha = tag_obj.get("object", {}).get("sha", sha)
+                  sha_to_tag[sha] = t
+              if len(rels) < 50:
+                  break
+              rpage += 1
+          print(f"  Mapped {len(sha_to_tag)} release SHAs")
+
+          def resolve_tag_for_run(run):
+              inputs = run.get("inputs") or {}
+              if isinstance(inputs, dict) and inputs.get("tag"):
+                  return inputs["tag"]
+              sha = run.get("head_sha", "")
+              if sha in sha_to_tag:
+                  return sha_to_tag[sha]
+              branch = run.get("head_branch", "")
+              if branch and branch.startswith("v"):
+                  return branch
+              return None
+
           for wf in WORKFLOWS:
               print(f"\n📋 {wf}")
               for page in range(1, max_pages + 1):
@@ -144,13 +181,7 @@ jobs:
                       break
                   for run in runs["workflow_runs"]:
                       run_id = run["id"]
-                      input_tag = run.get("inputs", {})
-                      if isinstance(input_tag, dict):
-                          input_tag = input_tag.get("tag", "")
-                      else:
-                          input_tag = ""
-
-                      # Get artifacts for this run
+                      tag = resolve_tag_for_run(run)
                       arts = gh(f"actions/runs/{run_id}/artifacts?per_page=100")
                       if not arts:
                           continue
@@ -163,8 +194,6 @@ jobs:
                                   name.startswith("ext-wheels-") or
                                   name.startswith("exotic-wheels-")):
                               continue
-                          # Try to figure out the tag from run input first
-                          tag = input_tag if input_tag else None
                           if tag not in tag_artifacts:
                               tag_artifacts[tag] = []
                           tag_artifacts[tag].append((art_id, name, run_id))
@@ -172,16 +201,13 @@ jobs:
                   if len(runs["workflow_runs"]) < 20:
                       break
 
-          print(f"\nFound artifact groups for tags: {sorted(k for k in tag_artifacts if k)}")
           unknown = tag_artifacts.get(None, [])
           if unknown:
-              print(f"  {len(unknown)} artifacts with unknown tag (will sample wheels to determine)")
-
-          # Move unknown-tag artifacts into per-tag buckets by sampling
-          if unknown:
+              print(f"  {len(unknown)} artifacts still have unknown tag - skipping:")
               for art_id, art_name, run_id in unknown:
-                  # Can't determine tag without downloading — skip for now, log it
-                  print(f"  ⚠️  Can't determine tag for artifact {art_name} (run {run_id}) — skipping")
+                  print(f"    run {run_id}: {art_name}")
+
+          print(f"\nFound artifact groups for tags: {sorted(k for k in tag_artifacts if k)}")
 
           # ── Process each tag ──
           total_uploaded = 0
@@ -320,30 +346,30 @@ jobs:
               for _, name, url in all_wheels
           )
 
+          pkg_html = (
+              "<!DOCTYPE html>\n<html>\n"
+              "  <head><title>Links for uv-ffi</title></head>\n"
+              "  <body>\n"
+              "    <h1>Links for uv-ffi</h1>\n"
+              + links + "\n"
+              "  </body>\n</html>\n"
+          )
           with open("uv-ffi/index.html", "w") as f:
-              f.write(f"""<!DOCTYPE html>
-              <html>
-                <head><title>Links for uv-ffi</title></head>
-                <body>
-                  <h1>Links for uv-ffi</h1>
-              {links}
-                </body>
-              </html>
-              """)
-              
-                        with open("index.html", "w") as f:
-                            f.write(f"""<!DOCTYPE html>
-              <html>
-                <head><title>uv-ffi wheel index</title></head>
-                <body>
-                  <h1>uv-ffi wheel index</h1>
-                  <p>Mainstream wheels: <a href="https://pypi.org/project/uv-ffi/">PyPI</a></p>
-                  <p>Exotic/extended platform wheels hosted here.</p>
-                  <pre>pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/</pre>
-                  <p><a href="uv-ffi/">Browse all {len(all_wheels)} wheels →</a></p>
-                </body>
-              </html>
-              """)
+              f.write(pkg_html)
+
+          root_html = (
+              "<!DOCTYPE html>\n<html>\n"
+              "  <head><title>uv-ffi wheel index</title></head>\n"
+              "  <body>\n"
+              "    <h1>uv-ffi wheel index</h1>\n"
+              "    <p>Mainstream wheels: <a href=\"https://pypi.org/project/uv-ffi/\">PyPI</a></p>\n"
+              "    <p>Exotic/extended platform wheels hosted here.</p>\n"
+              "    <pre>pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/</pre>\n"
+              "    <p><a href=\"uv-ffi/\">Browse all " + str(len(all_wheels)) + " wheels</a></p>\n"
+              "  </body>\n</html>\n"
+          )
+          with open("index.html", "w") as f:
+              f.write(root_html)
 
           print(f"Indexed {len(all_wheels)} total wheels ({len(pip_wheels)} from PyPI + {len(gh_wheels)} from GH Releases)")
           EOF
