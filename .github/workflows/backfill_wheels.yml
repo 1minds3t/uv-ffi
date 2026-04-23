@@ -14,6 +14,8 @@ on:
 permissions:
   contents: write
   actions: read
+  pages: write
+  id-token: write
 
 jobs:
   backfill:
@@ -269,18 +271,20 @@ jobs:
     needs: backfill
     runs-on: ubuntu-latest
     if: inputs.dry_run == false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
     permissions:
-      contents: write
+      pages: write
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: gh-pages
-
-      - name: Regenerate PEP 503 index
+      - name: Generate PEP 503 index
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
+          mkdir -p _site/uv-ffi
+
           python3 - <<'EOF'
           import os, json, urllib.request
 
@@ -332,8 +336,6 @@ jobs:
 
           all_wheels = sorted(seen.values(), key=lambda x: (x[0], x[1]))
 
-          os.makedirs("uv-ffi", exist_ok=True)
-
           links = "\n".join(
               f'  <a href="{url}" data-requires-python=">=3.8">{name}</a><br>'
               for _, name, url in all_wheels
@@ -347,7 +349,7 @@ jobs:
               + links + "\n"
               "  </body>\n</html>\n"
           )
-          with open("uv-ffi/index.html", "w") as f:
+          with open("_site/uv-ffi/index.html", "w") as f:
               f.write(pkg_html)
 
           root_html = (
@@ -361,17 +363,17 @@ jobs:
               "    <p><a href=\"uv-ffi/\">Browse all " + str(len(all_wheels)) + " wheels</a></p>\n"
               "  </body>\n</html>\n"
           )
-          with open("index.html", "w") as f:
+          with open("_site/index.html", "w") as f:
               f.write(root_html)
 
           print(f"Indexed {len(all_wheels)} total wheels ({len(pip_wheels)} from PyPI + {len(gh_wheels)} from GH Releases)")
           EOF
 
-      - name: Commit and push
-        run: |
-          git config user.name "wheel-index[bot]"
-          git config user.email "wheel-index[bot]@users.noreply.github.com"
-          git add index.html uv-ffi/index.html
-          git diff --staged --quiet && echo "No changes" && exit 0
-          git commit -m "Backfill wheel index update"
-          git push origin gh-pages
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site/
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v5
