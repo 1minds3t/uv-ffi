@@ -322,28 +322,28 @@ jobs:
 
           with open("uv-ffi/index.html", "w") as f:
               f.write(f"""<!DOCTYPE html>
-<html>
-  <head><title>Links for uv-ffi</title></head>
-  <body>
-    <h1>Links for uv-ffi</h1>
-{links}
-  </body>
-</html>
-""")
-
-          with open("index.html", "w") as f:
-              f.write(f"""<!DOCTYPE html>
-<html>
-  <head><title>uv-ffi wheel index</title></head>
-  <body>
-    <h1>uv-ffi wheel index</h1>
-    <p>Mainstream wheels: <a href="https://pypi.org/project/uv-ffi/">PyPI</a></p>
-    <p>Exotic/extended platform wheels hosted here.</p>
-    <pre>pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/</pre>
-    <p><a href="uv-ffi/">Browse all {len(all_wheels)} wheels →</a></p>
-  </body>
-</html>
-""")
+              <html>
+                <head><title>Links for uv-ffi</title></head>
+                <body>
+                  <h1>Links for uv-ffi</h1>
+              {links}
+                </body>
+              </html>
+              """)
+              
+                        with open("index.html", "w") as f:
+                            f.write(f"""<!DOCTYPE html>
+              <html>
+                <head><title>uv-ffi wheel index</title></head>
+                <body>
+                  <h1>uv-ffi wheel index</h1>
+                  <p>Mainstream wheels: <a href="https://pypi.org/project/uv-ffi/">PyPI</a></p>
+                  <p>Exotic/extended platform wheels hosted here.</p>
+                  <pre>pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/</pre>
+                  <p><a href="uv-ffi/">Browse all {len(all_wheels)} wheels →</a></p>
+                </body>
+              </html>
+              """)
 
           print(f"Indexed {len(all_wheels)} total wheels ({len(pip_wheels)} from PyPI + {len(gh_wheels)} from GH Releases)")
           EOF
