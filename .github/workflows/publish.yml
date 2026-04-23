@@ -1,13 +1,17 @@
-name: Publish to PyPI
+name: Publish to PyPI (uv-ffi)
 on:
   release:
     types: [published]
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to publish (e.g. v0.10.8.post4) — uses existing build-wheels artifacts'
+        description: 'Tag to publish (e.g. v0.10.8.post4)'
         required: false
         default: ''
+      source_only:
+        description: 'Only build and publish sdist, skip wheels'
+        type: boolean
+        default: false
 permissions:
   contents: write   # needed to upload to GH Releases and push gh-pages
   pages: write
@@ -84,6 +88,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Resolve tag and dispatch/find all three build workflows
+        if: inputs.source_only != 'true'
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
@@ -220,6 +225,7 @@ jobs:
           echo "Standard: $STD_ID  |  Extended: $EXT_ID  |  Exotic: $EXO_ID"
 
       - name: Download standard wheels
+        if: inputs.source_only != 'true'
         uses: dawidd6/action-download-artifact@v3
         with:
           workflow: build-wheels.yml
@@ -231,6 +237,7 @@ jobs:
         continue-on-error: true
 
       - name: Download extended wheels
+        if: inputs.source_only != 'true'
         uses: dawidd6/action-download-artifact@v3
         with:
           workflow: build-wheels-extended.yml
@@ -242,6 +249,7 @@ jobs:
         continue-on-error: true
 
       - name: Download exotic wheels
+        if: inputs.source_only != 'true'
         uses: dawidd6/action-download-artifact@v3
         with:
           workflow: build-wheels-exotic.yml
@@ -272,6 +280,7 @@ jobs:
 
       # ── SPLIT: decide what goes to PyPI vs GH Releases ───────────
       - name: Split wheels — PyPI (mainstream) vs GH Releases (exotic)
+        if: inputs.source_only != 'true'
         run: |
           mkdir -p dist-pypi dist-ghrelease
 
@@ -325,7 +334,7 @@ jobs:
 
       # ── Upload exotic wheels to GH Release ───────────────────────
       - name: Upload exotic wheels to GitHub Release
-        if: hashFiles('dist-ghrelease/*.whl') != ''
+        if: inputs.source_only != 'true' && hashFiles('dist-ghrelease/*.whl') != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.resolve.outputs.tag }}
@@ -336,6 +345,7 @@ jobs:
 
       # ── Remove already-uploaded PyPI wheels ──────────────────────
       - name: Remove wheels already on PyPI
+        if: inputs.source_only != 'true'
         run: |
           find dist-pypi/ -name "*.attestation" -delete 2>/dev/null || true
           VERSION=$(find dist-pypi/ -name "*.whl" | head -1 | grep -oP '(?<=uv_ffi-)[0-9][^-]+' || true)
@@ -356,6 +366,14 @@ jobs:
           echo "Uploading $(ls dist-pypi/*.whl 2>/dev/null | wc -l) wheels + sdist to PyPI"
           ls dist-pypi/ || true
 
+      - name: Copy sdist to dist-pypi (source_only mode)
+        if: inputs.source_only == 'true'
+        run: |
+          mkdir -p dist-pypi
+          cp dist/*.tar.gz dist-pypi/ 2>/dev/null || true
+          echo "source_only mode — uploading sdist only:"
+          ls dist-pypi/
+          
       # ── Publish to PyPI ───────────────────────────────────────────
       - name: Publish via OIDC (trusted publisher)
         id: oidc
