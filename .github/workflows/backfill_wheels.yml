@@ -32,7 +32,7 @@ jobs:
           pip install requests --quiet
 
           python3 - <<'PYEOF'
-          import os, json, subprocess, tempfile, zipfile, urllib.request, urllib.error, time, re
+          import os, json, subprocess, tempfile, zipfile, urllib.request, urllib.error, time, re, shutil
           from pathlib import Path
 
           repo     = os.environ["REPO"]
@@ -59,10 +59,6 @@ jobs:
               except urllib.error.HTTPError as e:
                   print(f"  HTTP {e.code} for {url}")
                   return None
-
-          def get_release_id(tag):
-              data = gh(f"releases/tags/{tag}")
-              return data["id"] if data else None
 
           def get_release_assets(release_id):
               assets = []
@@ -100,9 +96,7 @@ jobs:
                   return False
 
           def download_artifact(artifact_id, dest_dir):
-              # Step 1: get the redirect URL from GH API (do NOT follow redirect)
               import http.client, ssl
-              api_url = f"https://api.github.com/repos/{repo}/actions/artifacts/{artifact_id}/zip"
               ctx = ssl.create_default_context()
               conn = http.client.HTTPSConnection("api.github.com", context=ctx)
               conn.request("GET", f"/repos/{repo}/actions/artifacts/{artifact_id}/zip", headers={
@@ -119,7 +113,6 @@ jobs:
               s3_url = resp.getheader("Location")
               resp.read()
               conn.close()
-              # Step 2: download from S3 WITHOUT auth header
               try:
                   s3_req = urllib.request.Request(s3_url, headers={"User-Agent": "backfill-bot"})
                   with urllib.request.urlopen(s3_req) as s3_resp:
@@ -134,22 +127,12 @@ jobs:
                   print(f"    download failed: {e}")
                   return False
 
-          def version_from_tag(tag):
-              return tag.lstrip("v")
-
-          def tag_from_wheel(name):
-              # uv_ffi-0.10.8.post7-cp38-... → v0.10.8.post7
-              m = re.match(r"uv_ffi-([^-]+)-", name)
-              return f"v{m.group(1)}" if m else None
-
           # ── Collect all successful runs across all three workflows ──
           print("=" * 60)
           print("Scanning workflow runs...")
           print("=" * 60)
 
-          # Collect ALL non-expired artifacts from all workflow runs — deduplicate by id
-          print("Collecting all non-expired artifacts...")
-          all_artifacts = []  # list of (art_id, art_name, run_id)
+          all_artifacts = []
           seen_art_ids = set()
 
           for wf in WORKFLOWS:
@@ -181,83 +164,83 @@ jobs:
 
           print(f"\nFound {len(all_artifacts)} unique non-expired artifacts")
 
-          # Build release_id map and existing assets map
-          releases_map = {}  # tag -> release_id
-          existing_assets_map = {}  # release_id -> set of filenames
+          # Build release_id map
+          releases_map = {}
+          existing_assets_map = {}
           rels = gh(f"https://api.github.com/repos/{repo}/releases?per_page=100")
           if rels:
               for rel in rels:
                   releases_map[rel["tag_name"]] = rel["id"]
 
-          # ── Process: download each artifact, read version from wheel filename, route to release ──
           total_uploaded = 0
           total_skipped = 0
           total_failed = 0
-          # track wheels we've already uploaded this run to avoid re-uploading dupes
           uploaded_this_run = set()
 
-          with tempfile.TemporaryDirectory() as tmpdir:
-              for art_id, art_name, run_id in all_artifacts:
-                  art_dir = os.path.join(tmpdir, str(art_id))
-                  os.makedirs(art_dir, exist_ok=True)
+          # ── ONE artifact at a time — download, process, DELETE before next ──
+          for art_id, art_name, run_id in all_artifacts:
+              if dry_run:
+                  print(f"  [DRY RUN] would process artifact {art_name} (id={art_id})")
+                  continue
 
-                  if dry_run:
-                      print(f"  [DRY RUN] would process artifact {art_name} (id={art_id})")
+              art_dir = f"/tmp/art_{art_id}"
+              os.makedirs(art_dir, exist_ok=True)
+
+              print(f"\n📦 {art_name} (id={art_id})")
+              print(f"   Downloading...")
+              if not download_artifact(art_id, art_dir):
+                  total_failed += 1
+                  shutil.rmtree(art_dir, ignore_errors=True)
+                  continue
+
+              wheels = list(Path(art_dir).rglob("*.whl"))
+              if not wheels:
+                  print(f"   No wheels found in artifact")
+                  shutil.rmtree(art_dir, ignore_errors=True)
+                  continue
+
+              print(f"   Found {len(wheels)} wheels")
+              for whl in wheels:
+                  wname = whl.name
+                  m = re.match(r"uv_ffi-([^-]+)-", wname)
+                  if not m:
+                      print(f"   ⚠️  can't parse version from {wname}")
+                      continue
+                  tag = f"v{m.group(1)}"
+
+                  if wname in uploaded_this_run:
+                      print(f"   ✓ already uploaded this run: {wname}")
+                      total_skipped += 1
                       continue
 
-                  print(f"\n📦 {art_name} (id={art_id})")
-                  print(f"   Downloading...")
-                  if not download_artifact(art_id, art_dir):
+                  release_id = releases_map.get(tag)
+                  if not release_id:
+                      print(f"   ⚠️  no GH release for {tag} — skipping {wname}")
+                      continue
+
+                  if release_id not in existing_assets_map:
+                      existing_assets_map[release_id] = get_release_assets(release_id)
+                  existing = existing_assets_map[release_id]
+
+                  if wname in existing:
+                      print(f"   ✓ already on release {tag}: {wname}")
+                      total_skipped += 1
+                      uploaded_this_run.add(wname)
+                      continue
+
+                  print(f"   ⬆️  {tag} ← {wname}")
+                  if upload_asset(release_id, str(whl)):
+                      print(f"   ✅ {wname}")
+                      total_uploaded += 1
+                      existing.add(wname)
+                      uploaded_this_run.add(wname)
+                  else:
                       total_failed += 1
-                      continue
+                  time.sleep(0.3)
 
-                  wheels = list(Path(art_dir).rglob("*.whl"))
-                  if not wheels:
-                      print(f"   No wheels found in artifact")
-                      continue
-
-                  print(f"   Found {len(wheels)} wheels")
-                  for whl in wheels:
-                      wname = whl.name
-                      # Extract version from wheel filename: uv_ffi-0.10.8.post5-cp310-...
-                      m = re.match(r"uv_ffi-([^-]+)-", wname)
-                      if not m:
-                          print(f"   ⚠️  can't parse version from {wname}")
-                          continue
-                      version = m.group(1)
-                      tag = f"v{version}"
-
-                      if wname in uploaded_this_run:
-                          print(f"   ✓ already uploaded this run: {wname}")
-                          total_skipped += 1
-                          continue
-
-                      # Get or cache release id
-                      release_id = releases_map.get(tag)
-                      if not release_id:
-                          print(f"   ⚠️  no GH release for {tag} — skipping {wname}")
-                          continue
-
-                      # Get or cache existing assets for this release
-                      if release_id not in existing_assets_map:
-                          existing_assets_map[release_id] = get_release_assets(release_id)
-                      existing = existing_assets_map[release_id]
-
-                      if wname in existing:
-                          print(f"   ✓ already on release {tag}: {wname}")
-                          total_skipped += 1
-                          uploaded_this_run.add(wname)
-                          continue
-
-                      print(f"   ⬆️  {tag} ← {wname}")
-                      if upload_asset(release_id, str(whl)):
-                          print(f"   ✅ {wname}")
-                          total_uploaded += 1
-                          existing.add(wname)
-                          uploaded_this_run.add(wname)
-                      else:
-                          total_failed += 1
-                      time.sleep(0.3)
+              # DELETE immediately — do not accumulate on disk
+              shutil.rmtree(art_dir, ignore_errors=True)
+              print(f"   🗑️  disk cleared")
 
           print(f"\n{'='*60}")
           if dry_run:
@@ -311,7 +294,7 @@ jobs:
                   print(f"PyPI fetch failed: {e}")
                   return []
 
-          # GH Release wheels
+          # GH Release wheels — just read URLs, no downloading
           gh_wheels = []
           page = 1
           while True:
@@ -322,6 +305,8 @@ jobs:
                   for asset in rel.get("assets", []):
                       if asset["name"].endswith(".whl"):
                           gh_wheels.append((rel["tag_name"], asset["name"], asset["browser_download_url"]))
+              if len(releases) < 50:
+                  break
               page += 1
 
           # PyPI wheels
