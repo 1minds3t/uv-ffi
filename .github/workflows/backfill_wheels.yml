@@ -145,45 +145,10 @@ jobs:
           print("Scanning workflow runs...")
           print("=" * 60)
 
-          # Map: tag → [artifact_ids]
-          tag_artifacts = {}  # tag → list of (artifact_id, artifact_name)
-
-          # Build SHA→tag map from all releases for release-triggered runs
-          print("Building SHA->tag map from releases...")
-          sha_to_tag = {}
-          rpage = 1
-          while True:
-              rels = gh(f"https://api.github.com/repos/{repo}/releases?per_page=50&page={rpage}")
-              if not rels:
-                  break
-              for rel in rels:
-                  t = rel["tag_name"]
-                  ref = gh(f"https://api.github.com/repos/{repo}/git/ref/tags/{t}")
-                  if not ref:
-                      continue
-                  obj = ref.get("object", {})
-                  sha = obj.get("sha", "")
-                  if obj.get("type") == "tag":
-                      tag_obj = gh(f"https://api.github.com/repos/{repo}/git/tags/{sha}")
-                      if tag_obj:
-                          sha = tag_obj.get("object", {}).get("sha", sha)
-                  sha_to_tag[sha] = t
-              if len(rels) < 50:
-                  break
-              rpage += 1
-          print(f"  Mapped {len(sha_to_tag)} release SHAs")
-
-          def resolve_tag_for_run(run):
-              inputs = run.get("inputs") or {}
-              if isinstance(inputs, dict) and inputs.get("tag"):
-                  return inputs["tag"]
-              sha = run.get("head_sha", "")
-              if sha in sha_to_tag:
-                  return sha_to_tag[sha]
-              branch = run.get("head_branch", "")
-              if branch and branch.startswith("v"):
-                  return branch
-              return None
+          # Collect ALL non-expired artifacts from all workflow runs — deduplicate by id
+          print("Collecting all non-expired artifacts...")
+          all_artifacts = []  # list of (art_id, art_name, run_id)
+          seen_art_ids = set()
 
           for wf in WORKFLOWS:
               print(f"\n📋 {wf}")
@@ -193,88 +158,104 @@ jobs:
                       break
                   for run in runs["workflow_runs"]:
                       run_id = run["id"]
-                      tag = resolve_tag_for_run(run)
                       arts = gh(f"actions/runs/{run_id}/artifacts?per_page=100")
                       if not arts:
                           continue
                       for art in arts.get("artifacts", []):
                           if art["expired"]:
                               continue
-                          name = art["name"]
                           art_id = art["id"]
+                          if art_id in seen_art_ids:
+                              continue
+                          name = art["name"]
                           if not (name.startswith("wheels-") or
                                   name.startswith("ext-wheels-") or
                                   name.startswith("exotic-wheels-")):
                               continue
-                          if tag not in tag_artifacts:
-                              tag_artifacts[tag] = []
-                          tag_artifacts[tag].append((art_id, name, run_id))
-
+                          seen_art_ids.add(art_id)
+                          all_artifacts.append((art_id, name, run_id))
                   if len(runs["workflow_runs"]) < 20:
                       break
 
-          unknown = tag_artifacts.get(None, [])
-          if unknown:
-              print(f"  {len(unknown)} artifacts still have unknown tag - skipping:")
-              for art_id, art_name, run_id in unknown:
-                  print(f"    run {run_id}: {art_name}")
+          print(f"\nFound {len(all_artifacts)} unique non-expired artifacts")
 
-          print(f"\nFound artifact groups for tags: {sorted(k for k in tag_artifacts if k)}")
+          # Build release_id map and existing assets map
+          releases_map = {}  # tag -> release_id
+          existing_assets_map = {}  # release_id -> set of filenames
+          rels = gh(f"https://api.github.com/repos/{repo}/releases?per_page=100")
+          if rels:
+              for rel in rels:
+                  releases_map[rel["tag_name"]] = rel["id"]
 
-          # ── Process each tag ──
+          # ── Process: download each artifact, read version from wheel filename, route to release ──
           total_uploaded = 0
           total_skipped = 0
           total_failed = 0
+          # track wheels we've already uploaded this run to avoid re-uploading dupes
+          uploaded_this_run = set()
 
-          for tag in sorted(k for k in tag_artifacts if k):
-              print(f"\n{'='*60}")
-              print(f"Tag: {tag}")
-              artifacts = tag_artifacts[tag]
-              print(f"  {len(artifacts)} artifacts to process")
+          with tempfile.TemporaryDirectory() as tmpdir:
+              for art_id, art_name, run_id in all_artifacts:
+                  art_dir = os.path.join(tmpdir, str(art_id))
+                  os.makedirs(art_dir, exist_ok=True)
 
-              # Get or skip release
-              release_id = get_release_id(tag)
-              if not release_id:
-                  print(f"  ⚠️  No GH Release found for {tag} — skipping")
-                  print(f"  Create it first: gh release create {tag} --repo {repo}")
-                  continue
+                  if dry_run:
+                      print(f"  [DRY RUN] would process artifact {art_name} (id={art_id})")
+                      continue
 
-              existing_assets = get_release_assets(release_id)
-              print(f"  Release {release_id} has {len(existing_assets)} existing assets")
+                  print(f"\n📦 {art_name} (id={art_id})")
+                  print(f"   Downloading...")
+                  if not download_artifact(art_id, art_dir):
+                      total_failed += 1
+                      continue
 
-              with tempfile.TemporaryDirectory() as tmpdir:
-                  for art_id, art_name, run_id in artifacts:
-                      print(f"\n  📦 {art_name} (id={art_id})")
+                  wheels = list(Path(art_dir).rglob("*.whl"))
+                  if not wheels:
+                      print(f"   No wheels found in artifact")
+                      continue
 
-                      if dry_run:
-                          print(f"    [DRY RUN] would download and upload to release {release_id}")
+                  print(f"   Found {len(wheels)} wheels")
+                  for whl in wheels:
+                      wname = whl.name
+                      # Extract version from wheel filename: uv_ffi-0.10.8.post5-cp310-...
+                      m = re.match(r"uv_ffi-([^-]+)-", wname)
+                      if not m:
+                          print(f"   ⚠️  can't parse version from {wname}")
+                          continue
+                      version = m.group(1)
+                      tag = f"v{version}"
+
+                      if wname in uploaded_this_run:
+                          print(f"   ✓ already uploaded this run: {wname}")
+                          total_skipped += 1
                           continue
 
-                      # Download
-                      art_dir = os.path.join(tmpdir, str(art_id))
-                      os.makedirs(art_dir)
-                      print(f"    Downloading...")
-                      if not download_artifact(art_id, art_dir):
+                      # Get or cache release id
+                      release_id = releases_map.get(tag)
+                      if not release_id:
+                          print(f"   ⚠️  no GH release for {tag} — skipping {wname}")
+                          continue
+
+                      # Get or cache existing assets for this release
+                      if release_id not in existing_assets_map:
+                          existing_assets_map[release_id] = get_release_assets(release_id)
+                      existing = existing_assets_map[release_id]
+
+                      if wname in existing:
+                          print(f"   ✓ already on release {tag}: {wname}")
+                          total_skipped += 1
+                          uploaded_this_run.add(wname)
+                          continue
+
+                      print(f"   ⬆️  {tag} ← {wname}")
+                      if upload_asset(release_id, str(whl)):
+                          print(f"   ✅ {wname}")
+                          total_uploaded += 1
+                          existing.add(wname)
+                          uploaded_this_run.add(wname)
+                      else:
                           total_failed += 1
-                          continue
-
-                      # Upload each wheel
-                      wheels = list(Path(art_dir).rglob("*.whl"))
-                      print(f"    Found {len(wheels)} wheels")
-                      for whl in wheels:
-                          wname = whl.name
-                          if wname in existing_assets:
-                              print(f"    ✓ already on release: {wname}")
-                              total_skipped += 1
-                              continue
-                          print(f"    ⬆️  uploading {wname}...")
-                          if upload_asset(release_id, str(whl)):
-                              print(f"    ✅ {wname}")
-                              total_uploaded += 1
-                              existing_assets.add(wname)
-                          else:
-                              total_failed += 1
-                          time.sleep(0.5)  # be nice to the API
+                      time.sleep(0.3)
 
           print(f"\n{'='*60}")
           if dry_run:
