@@ -5,6 +5,91 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8.post7] — 2026-04-22
+
+ABI3 Wheels & Split Distribution Pipeline
+
+This release introduces a major overhaul of the `uv-ffi` build and distribution system, significantly reducing PyPI storage usage while improving install reliability across platforms.
+
+---
+
+`uv-ffi` now builds using `abi3-py38`, producing **one wheel per architecture** compatible with all Python versions ≥3.8.
+
+- Eliminates per-version wheel duplication (cp38–cp313)
+- Reduces PyPI storage footprint dramatically
+- Speeds up CI build times
+- Simplifies downstream compatibility
+
+---
+
+The release pipeline now separates artifacts into two tiers:
+
+- **PyPI (Primary Distribution)**
+  - macOS `universal2`
+  - Linux `manylinux` (x86_64, aarch64)
+  - Windows (`amd64`, `arm64`)
+  - (optional musllinux targets)
+
+- **GitHub Releases (Extended/Exotic)**
+  - s390x, ppc64le, riscv64
+  - legacy / niche architectures
+  - experimental targets
+
+This keeps PyPI lean while still supporting advanced use cases.
+
+---
+
+A lightweight index is now generated from GitHub Release assets, allowing access to non-PyPI wheels.
+
+This lays the groundwork for:
+- `--extra-index-url` usage
+- external wheel hosting without PyPI storage pressure
+
+---
+
+- **Single Orchestrator Workflow**
+  - `publish.yml` now owns the full release lifecycle
+  - build workflows no longer auto-trigger on release
+  - eliminates duplicate CI runs and race conditions
+
+- **Artifact Routing**
+  - Wheels are automatically classified and routed to:
+    - PyPI (core)
+    - GitHub Releases (exotic)
+
+- **Improved Reliability**
+  - Increased workflow timeouts for large builds
+  - Added retry logic for checkout and build steps
+
+---
+
+- Massive reduction in PyPI storage usage
+- Cleaner, maintainable build matrix
+- Faster installs for the majority of users
+- Continued support for niche platforms without bloating distribution
+
+---
+
+This release marks the transition from a monolithic wheel distribution strategy to a scalable, multi-tier delivery system.
+
+---
+
+**New Features:**
+- feat: enable abi3-py38 for universal wheels (reduce matrix bloat)
+
+**Updates:**
+- Update build-wheels workflow for better checks
+
+**Other Changes:**
+- Refactor build-wheels-exotic workflow and artifact names
+- Refactor build-wheels-extended.yml for clarity
+- Enhance publish workflow for wheels and index updates
+- Fix wheel filename variable in build-wheels.yml
+- Add retry attempts for checkout in build-wheels.yml
+- ...and 1 more changes
+
+_5 files changed, 296 insertions(+), 190 deletions(-)_
+
 ## [0.10.8.post6] — 2026-04-22
 
 The Auto-Healing & Transparent Errors Release
