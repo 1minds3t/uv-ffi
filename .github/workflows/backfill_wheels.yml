@@ -1,0 +1,358 @@
+name: "🗄️ Backfill Wheels to GH Releases"
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — show what would be uploaded without uploading'
+        type: boolean
+        default: true
+      max_pages:
+        description: 'Max pages of runs to scan per workflow (20 runs/page)'
+        default: '10'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  backfill:
+    name: "⬆️ Backfill artifacts → GH Releases"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scan all build runs and upload artifacts to GH Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          MAX_PAGES: ${{ inputs.max_pages }}
+        run: |
+          pip install requests --quiet
+
+          python3 - <<'PYEOF'
+          import os, json, subprocess, tempfile, zipfile, urllib.request, urllib.error, time, re
+          from pathlib import Path
+
+          repo     = os.environ["REPO"]
+          token    = os.environ["GH_TOKEN"]
+          dry_run  = os.environ["DRY_RUN"] == "true"
+          max_pages = int(os.environ["MAX_PAGES"])
+
+          WORKFLOWS = [
+              "build-wheels.yml",
+              "build-wheels-extended.yml",
+              "build-wheels-exotic.yml",
+          ]
+
+          def gh(path, raw=False):
+              url = f"https://api.github.com/repos/{repo}/{path}" if not path.startswith("http") else path
+              req = urllib.request.Request(url, headers={
+                  "Authorization": f"token {token}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              })
+              try:
+                  resp = urllib.request.urlopen(req)
+                  return resp.read() if raw else json.loads(resp.read())
+              except urllib.error.HTTPError as e:
+                  print(f"  HTTP {e.code} for {url}")
+                  return None
+
+          def get_release_id(tag):
+              data = gh(f"releases/tags/{tag}")
+              return data["id"] if data else None
+
+          def get_release_assets(release_id):
+              assets = []
+              page = 1
+              while True:
+                  data = gh(f"releases/{release_id}/assets?per_page=100&page={page}")
+                  if not data:
+                      break
+                  assets.extend(a["name"] for a in data)
+                  if len(data) < 100:
+                      break
+                  page += 1
+              return set(assets)
+
+          def upload_asset(release_id, filepath):
+              name = Path(filepath).name
+              size = Path(filepath).stat().st_size
+              url = f"https://uploads.github.com/repos/{repo}/releases/{release_id}/assets?name={name}"
+              with open(filepath, "rb") as f:
+                  data = f.read()
+              req = urllib.request.Request(url, data=data, method="POST", headers={
+                  "Authorization": f"token {token}",
+                  "Content-Type": "application/octet-stream",
+                  "Content-Length": str(size),
+              })
+              try:
+                  urllib.request.urlopen(req)
+                  return True
+              except urllib.error.HTTPError as e:
+                  body = e.read().decode()
+                  if "already_exists" in body:
+                      print(f"    already exists: {name}")
+                      return True
+                  print(f"    upload failed {e.code}: {body[:200]}")
+                  return False
+
+          def download_artifact(artifact_id, dest_dir):
+              url = f"https://api.github.com/repos/{repo}/actions/artifacts/{artifact_id}/zip"
+              req = urllib.request.Request(url, headers={
+                  "Authorization": f"token {token}",
+                  "Accept": "application/vnd.github+json",
+              })
+              try:
+                  # Follow redirect manually
+                  import urllib.request as ur
+                  opener = ur.build_opener(ur.HTTPRedirectHandler())
+                  resp = opener.open(req)
+                  zip_path = os.path.join(dest_dir, f"{artifact_id}.zip")
+                  with open(zip_path, "wb") as f:
+                      f.write(resp.read())
+                  # Extract
+                  with zipfile.ZipFile(zip_path, "r") as z:
+                      z.extractall(dest_dir)
+                  os.remove(zip_path)
+                  return True
+              except Exception as e:
+                  print(f"    download failed: {e}")
+                  return False
+
+          def version_from_tag(tag):
+              return tag.lstrip("v")
+
+          def tag_from_wheel(name):
+              # uv_ffi-0.10.8.post7-cp38-... → v0.10.8.post7
+              m = re.match(r"uv_ffi-([^-]+)-", name)
+              return f"v{m.group(1)}" if m else None
+
+          # ── Collect all successful runs across all three workflows ──
+          print("=" * 60)
+          print("Scanning workflow runs...")
+          print("=" * 60)
+
+          # Map: tag → [artifact_ids]
+          tag_artifacts = {}  # tag → list of (artifact_id, artifact_name)
+
+          for wf in WORKFLOWS:
+              print(f"\n📋 {wf}")
+              for page in range(1, max_pages + 1):
+                  runs = gh(f"actions/workflows/{wf}/runs?per_page=20&page={page}&status=success")
+                  if not runs or not runs.get("workflow_runs"):
+                      break
+                  for run in runs["workflow_runs"]:
+                      run_id = run["id"]
+                      input_tag = run.get("inputs", {})
+                      if isinstance(input_tag, dict):
+                          input_tag = input_tag.get("tag", "")
+                      else:
+                          input_tag = ""
+
+                      # Get artifacts for this run
+                      arts = gh(f"actions/runs/{run_id}/artifacts?per_page=100")
+                      if not arts:
+                          continue
+                      for art in arts.get("artifacts", []):
+                          if art["expired"]:
+                              continue
+                          name = art["name"]
+                          art_id = art["id"]
+                          if not (name.startswith("wheels-") or
+                                  name.startswith("ext-wheels-") or
+                                  name.startswith("exotic-wheels-")):
+                              continue
+                          # Try to figure out the tag from run input first
+                          tag = input_tag if input_tag else None
+                          if tag not in tag_artifacts:
+                              tag_artifacts[tag] = []
+                          tag_artifacts[tag].append((art_id, name, run_id))
+
+                  if len(runs["workflow_runs"]) < 20:
+                      break
+
+          print(f"\nFound artifact groups for tags: {sorted(k for k in tag_artifacts if k)}")
+          unknown = tag_artifacts.get(None, [])
+          if unknown:
+              print(f"  {len(unknown)} artifacts with unknown tag (will sample wheels to determine)")
+
+          # Move unknown-tag artifacts into per-tag buckets by sampling
+          if unknown:
+              for art_id, art_name, run_id in unknown:
+                  # Can't determine tag without downloading — skip for now, log it
+                  print(f"  ⚠️  Can't determine tag for artifact {art_name} (run {run_id}) — skipping")
+
+          # ── Process each tag ──
+          total_uploaded = 0
+          total_skipped = 0
+          total_failed = 0
+
+          for tag in sorted(k for k in tag_artifacts if k):
+              print(f"\n{'='*60}")
+              print(f"Tag: {tag}")
+              artifacts = tag_artifacts[tag]
+              print(f"  {len(artifacts)} artifacts to process")
+
+              # Get or skip release
+              release_id = get_release_id(tag)
+              if not release_id:
+                  print(f"  ⚠️  No GH Release found for {tag} — skipping")
+                  print(f"  Create it first: gh release create {tag} --repo {repo}")
+                  continue
+
+              existing_assets = get_release_assets(release_id)
+              print(f"  Release {release_id} has {len(existing_assets)} existing assets")
+
+              with tempfile.TemporaryDirectory() as tmpdir:
+                  for art_id, art_name, run_id in artifacts:
+                      print(f"\n  📦 {art_name} (id={art_id})")
+
+                      if dry_run:
+                          print(f"    [DRY RUN] would download and upload to release {release_id}")
+                          continue
+
+                      # Download
+                      art_dir = os.path.join(tmpdir, str(art_id))
+                      os.makedirs(art_dir)
+                      print(f"    Downloading...")
+                      if not download_artifact(art_id, art_dir):
+                          total_failed += 1
+                          continue
+
+                      # Upload each wheel
+                      wheels = list(Path(art_dir).rglob("*.whl"))
+                      print(f"    Found {len(wheels)} wheels")
+                      for whl in wheels:
+                          wname = whl.name
+                          if wname in existing_assets:
+                              print(f"    ✓ already on release: {wname}")
+                              total_skipped += 1
+                              continue
+                          print(f"    ⬆️  uploading {wname}...")
+                          if upload_asset(release_id, str(whl)):
+                              print(f"    ✅ {wname}")
+                              total_uploaded += 1
+                              existing_assets.add(wname)
+                          else:
+                              total_failed += 1
+                          time.sleep(0.5)  # be nice to the API
+
+          print(f"\n{'='*60}")
+          if dry_run:
+              print("DRY RUN complete — rerun with dry_run=false to actually upload")
+          else:
+              print(f"Done! uploaded={total_uploaded} skipped={total_skipped} failed={total_failed}")
+          PYEOF
+
+  update-wheel-index:
+    name: "📄 Update GH Pages wheel index"
+    needs: backfill
+    runs-on: ubuntu-latest
+    if: inputs.dry_run == false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Regenerate PEP 503 index
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'EOF'
+          import os, json, urllib.request
+
+          repo = os.environ["REPO"]
+          token = os.environ["GH_TOKEN"]
+
+          def gh(url):
+              req = urllib.request.Request(
+                  url, headers={"Authorization": f"token {token}",
+                  "Accept": "application/vnd.github+json"})
+              return json.loads(urllib.request.urlopen(req).read())
+
+          def pypi_wheels(pkg):
+              try:
+                  req = urllib.request.Request(f"https://pypi.org/pypi/{pkg}/json")
+                  data = json.loads(urllib.request.urlopen(req).read())
+                  out = []
+                  for ver, files in data["releases"].items():
+                      for f in files:
+                          if f["filename"].endswith(".whl"):
+                              out.append((ver, f["filename"], f["url"]))
+                  return out
+              except Exception as e:
+                  print(f"PyPI fetch failed: {e}")
+                  return []
+
+          # GH Release wheels
+          gh_wheels = []
+          page = 1
+          while True:
+              releases = gh(f"https://api.github.com/repos/{repo}/releases?per_page=50&page={page}")
+              if not releases:
+                  break
+              for rel in releases:
+                  for asset in rel.get("assets", []):
+                      if asset["name"].endswith(".whl"):
+                          gh_wheels.append((rel["tag_name"], asset["name"], asset["browser_download_url"]))
+              page += 1
+
+          # PyPI wheels
+          pip_wheels = pypi_wheels("uv-ffi")
+
+          # Merge — GH Release wins on duplicates
+          seen = {}
+          for tag, name, url in pip_wheels:
+              seen[name] = (tag, name, url)
+          for tag, name, url in gh_wheels:
+              seen[name] = (tag, name, url)
+
+          all_wheels = sorted(seen.values(), key=lambda x: (x[0], x[1]))
+
+          os.makedirs("uv-ffi", exist_ok=True)
+
+          links = "\n".join(
+              f'  <a href="{url}" data-requires-python=">=3.8">{name}</a><br>'
+              for _, name, url in all_wheels
+          )
+
+          with open("uv-ffi/index.html", "w") as f:
+              f.write(f"""<!DOCTYPE html>
+<html>
+  <head><title>Links for uv-ffi</title></head>
+  <body>
+    <h1>Links for uv-ffi</h1>
+{links}
+  </body>
+</html>
+""")
+
+          with open("index.html", "w") as f:
+              f.write(f"""<!DOCTYPE html>
+<html>
+  <head><title>uv-ffi wheel index</title></head>
+  <body>
+    <h1>uv-ffi wheel index</h1>
+    <p>Mainstream wheels: <a href="https://pypi.org/project/uv-ffi/">PyPI</a></p>
+    <p>Exotic/extended platform wheels hosted here.</p>
+    <pre>pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/</pre>
+    <p><a href="uv-ffi/">Browse all {len(all_wheels)} wheels →</a></p>
+  </body>
+</html>
+""")
+
+          print(f"Indexed {len(all_wheels)} total wheels ({len(pip_wheels)} from PyPI + {len(gh_wheels)} from GH Releases)")
+          EOF
+
+      - name: Commit and push
+        run: |
+          git config user.name "wheel-index[bot]"
+          git config user.email "wheel-index[bot]@users.noreply.github.com"
+          git add index.html uv-ffi/index.html
+          git diff --staged --quiet && echo "No changes" && exit 0
+          git commit -m "Backfill wheel index update"
+          git push origin gh-pages
