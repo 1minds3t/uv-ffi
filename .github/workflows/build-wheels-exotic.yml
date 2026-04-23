@@ -1,12 +1,15 @@
 name: "👽 Build uv-ffi Wheels (Ultra-Exotic & Source)"
 
 on:
-  release:
-    types: [published]
+  # NO release trigger — publish.yml dispatches this
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v0.10.7)'
+        required: false
+        default: ''
 
 jobs:
-  # 2. DELIBERATE PYPY MATRIX
   build-pypy:
     name: "PyPy ${{ matrix.pypy }} • ${{ matrix.os }}"
     runs-on: ${{ matrix.os }}
@@ -18,23 +21,24 @@ jobs:
         pypy: ["pypy3.9", "pypy3.10"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.pypy }}
-      
+
       - name: Build PyPy Wheel
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
           args: --release --out ${{ github.workspace }}/wheels/ --interpreter ${{ matrix.pypy }}
-      
+
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
         with:
-          name: "ext-wheels-pypy-${{ matrix.os }}-${{ matrix.pypy }}"
+          name: "exotic-wheels-pypy-${{ matrix.os }}-${{ matrix.pypy }}"
           path: wheels/
 
-  # 3. GRAALPY (Oracle's JVM-based Python)
   build-graalpy:
     name: "GraalPy • ${{ matrix.os }}"
     runs-on: ${{ matrix.os }}
@@ -45,24 +49,24 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
-          python-version: "graalpy24.0" # Official GitHub actions syntax for GraalPy
-      
+          python-version: "graalpy24.0"
+
       - name: Build GraalPy Wheel
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
-          # For GraalPy, setup-python aliases it to `python`
           args: --release --out ${{ github.workspace }}/wheels/ --interpreter python
-      
+
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
         with:
-          name: "ext-wheels-graalpy-${{ matrix.os }}"
+          name: "exotic-wheels-graalpy-${{ matrix.os }}"
           path: wheels/
 
-  # 4. FREE-THREADED CPYTHON (NO-GIL)
   build-freethreaded:
     name: "Free-Threaded 3.13t • ${{ matrix.os }}"
     runs-on: ${{ matrix.os }}
@@ -73,49 +77,51 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13t" # The 't' fetches the experimental Free-Threaded build!
-      
+          python-version: "3.13t"
+
       - name: Build Free-Threaded Wheel
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
           args: --release --out ${{ github.workspace }}/wheels/ --interpreter python
-      
+
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
         with:
-          name: "ext-wheels-freethreaded-${{ matrix.os }}"
+          name: "exotic-wheels-freethreaded-${{ matrix.os }}"
           path: wheels/
 
-  # 5. WEBASSEMBLY (PYODIDE / EMSCRIPTEN)
   build-wasm:
     name: "WebAssembly (Pyodide)"
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Setup Emscripten (Required for WASM)
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
-          version: 3.1.58 # Matches Pyodide 0.26 Emscripten version
-      
+          version: 3.1.58
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      
+
       - name: Build WebAssembly Wheel
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
           target: wasm32-unknown-emscripten
-          # We tell maturin to build against Python 3.12 for Pyodide
           args: --release --out ${{ github.workspace }}/wheels/ -i 3.12
-      
+
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
         with:
-          name: "ext-wheels-wasm"
+          name: "exotic-wheels-wasm"
           path: wheels/
