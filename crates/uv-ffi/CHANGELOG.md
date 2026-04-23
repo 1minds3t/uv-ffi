@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8.post8] — 2026-04-23
+
+The UX Safety Net & Wheel Backfill Release
+
+**The UX Safety Net & Wheel Backfill Release**
+
+This release completely overhauls the developer experience (DX) for users on "exotic" platforms (musl, PyPy, riscv64, s390x, etc.) and introduces a massive CI backfill system to ensure every wheel ever built is permanently indexed and available.
+
+* **Smart Source Build Hints (`build.rs`):** If a user runs `pip install uv-ffi` on an exotic platform and `pip` attempts to build from source, a custom `build.rs` script now intercepts the build process. Before throwing a compiler error, it explicitly prints a clean, highlighted warning instructing the user to use the `--extra-index-url` to grab the pre-built wheel.
+* **Graceful Import Failures (`__init__.py`):** Added a pure-Python wrapper around the native extension. If the `.so`/`.pyd` file fails to load due to ABI/architecture mismatches, the resulting `ImportError` is intercepted. The user is presented with a highly descriptive error detailing their OS/Architecture and the exact `pip` command to resolve the issue using the extended GitHub index.
+
+* **Historical Wheel Recovery:** Deployed a powerful new `backfill_wheels.yml` workflow. This script scans the GitHub API across all past CI runs, deduplicates, downloads, and intelligently routes hundreds of non-expired exotic wheels into their correct GitHub Releases.
+* **Unified PEP-503 Index:** The index generator now intelligently merges PyPI's JSON API responses with the GitHub Release assets, creating a single, comprehensive HTML index of every `uv-ffi` wheel in existence.
+
+* **README Overhaul:** Completely rewrote the root and crate-level `README.md` files to clearly separate "Standard Platforms" (PyPI) from "Exotic Platforms" (GitHub Pages), complete with a detailed compatibility matrix.
+* **Surgical Publishing:** Added a `source_only` manual dispatch option to `publish.yml` allowing for quick, wheel-less updates to the source distribution.
+* **Strict Platform Filtering:** Enhanced the publish workflow to strictly filter which CPython targets are permitted onto PyPI, guaranteeing the 10GB limit is never breached.
+
+---
+
+**Updates:**
+- Update HTML writing logic in backfill_wheels.yml
+
+**Other Changes:**
+- feat(uv-ffi): post8 — build hint, __init__ error msg, extended wheels index, README overhaul
+- Refactor artifact collection in backfill_wheels.yml
+- Refactor artifact download process in workflow
+- Enhance backfill_wheels workflow with SHA-to-tag mapping
+- Add backfill workflow for wheels to GH Releases
+- ...and 4 more changes
+
+_7 files changed, 566 insertions(+), 331 deletions(-)_
+
 ## [0.10.8.post7] — 2026-04-22
 
 ABI3 Wheels & Split Distribution Pipeline
