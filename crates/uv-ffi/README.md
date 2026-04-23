@@ -8,6 +8,28 @@ Used internally by [omnipkg](https://github.com/1minds3t/omnipkg), but directly 
 
 ---
 
+## Installation
+
+### Standard platforms
+```bash
+pip install uv-ffi
+```
+Covers Linux x86_64/aarch64, macOS arm64/x86_64/universal2, Windows amd64/arm64 — all via ABI3 wheels (Python ≥ 3.8).
+
+### Exotic platforms (musl Alpine, armv7, riscv64, s390x, ppc64le, free-threaded CPython 3.13t, PyPy, GraalPy, Windows x86)
+```bash
+pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/
+```
+400+ wheels hosted on GitHub Releases, indexed at the URL above. These were removed from PyPI to stay under the 10 GB storage limit.
+
+### Build from source (requires Rust toolchain)
+```bash
+pip install uv-ffi --no-binary uv-ffi
+```
+If the Rust build fails, pre-built wheels for your platform are almost certainly available via the extra-index-url above.
+
+---
+
 ## Usage
 
 ```python
@@ -235,15 +257,19 @@ Coexistence means no corruption, not automatic cache synchronization — see cac
 
 ## Platform Support
 
-| Platform | Architectures | Python |
-|:--|:--|:--|
-| Linux glibc ≥ 2.17 | x86_64, i686, aarch64, armv7, ppc64le, s390x | 3.10–3.14 |
-| Linux musl ≥ 1.2 | x86_64, i686, aarch64, armv7, ppc64le | 3.10–3.14 |
-| Linux glibc ≥ 2.31 | riscv64 | 3.10–3.14 |
-| macOS (universal2) | x86_64 + arm64 | 3.8–3.14 |
-| Windows x64 | x86_64 | 3.8–3.14 |
-| Windows ARM64 | aarch64 | 3.11–3.14 |
-| Windows x86 | i686 | 3.8–3.14 |
+| Platform | Architectures | Python | Index |
+|:--|:--|:--|:--|
+| Linux glibc ≥ 2.17 | x86_64, aarch64 | 3.8–3.14 | PyPI + Extra |
+| Linux glibc ≥ 2.17 | i686, armv7, ppc64le, s390x | 3.8–3.14 | Extra only |
+| Linux glibc ≥ 2.31 | riscv64 | 3.8–3.14 | Extra only |
+| Linux musl ≥ 1.2 | x86_64, aarch64 | 3.8–3.14 | PyPI + Extra |
+| Linux musl ≥ 1.2 | armv7, i686, ppc64le | 3.8–3.14 | Extra only |
+| macOS (universal2) | x86_64 + arm64 | 3.8–3.14 | PyPI + Extra |
+| Windows x64 / ARM64 | amd64, aarch64 | 3.8–3.14 | PyPI + Extra |
+| Windows x86 | i686 | 3.8–3.14 | Extra only |
+| CPython 3.13t (free-threaded) | x86_64, aarch64 | 3.13t | Extra only |
+| PyPy 3.9/3.10 | x86_64 | 3.9–3.10 | Extra only |
+| GraalPy | x86_64 | — | Extra only |
 
 ---
 
@@ -259,6 +285,8 @@ uv-ffi versions track the upstream uv release they are built against.
 | 0.10.8.post3 | 0.10.8 | Windows ARM64 wheels, Tokio `PathError` fix on Windows runners |
 | 0.10.8.post4 | 0.10.8 | Bubble environments (`--target` isolation), persistent `RegistryClient` + `PythonEnvironment`, zero-disk post-install cache update, JSON C ABI |
 | 0.10.8.post5 | 0.10.8 | CI hardening, per-platform PyPI checks, sdist publishing, Windows PowerShell fixes |
+| 0.10.8.post6 | 0.10.8 | Auto-healing PyPI registry cache, detailed FFI error messages (4-tuple return), `clear_registry_cache()` |
+| 0.10.8.post7 | 0.10.8 | ABI3 wheels (one wheel per arch, Python ≥ 3.8), split PyPI/GitHub Releases distribution, GH Pages index |
 
 ---
 

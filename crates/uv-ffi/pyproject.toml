@@ -16,6 +16,8 @@ classifiers = [
   "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
   "Programming Language :: Python :: 3.8",
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
@@ -36,7 +38,10 @@ Homepage = "https://github.com/1minds3t/uv-ffi"
 "Source Code" = "https://github.com/1minds3t/uv-ffi"
 "Bug Tracker" = "https://github.com/1minds3t/uv-ffi/issues"
 Omnipkg = "https://pypi.org/project/omnipkg/"
+"Extended Wheels" = "https://1minds3t.github.io/uv-ffi/"
 
 [tool.maturin]
 module-name = "uv_ffi.uv_ffi"
+python-packages = ["python/uv_ffi"]
 include = ["LICENSE-MIT"]
+
