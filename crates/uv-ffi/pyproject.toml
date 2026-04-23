@@ -43,5 +43,5 @@ Omnipkg = "https://pypi.org/project/omnipkg/"
 [tool.maturin]
 module-name = "uv_ffi.uv_ffi"
 python-packages = ["python/uv_ffi"]
-include = ["LICENSE-MIT"]
+include = ["LICENSE-MIT", "NOTICE"]
 
