@@ -1,4 +1,3 @@
-# publish.yml — dispatches builds and exits immediately
 name: Publish to PyPI (uv-ffi)
 on:
   release:
@@ -10,11 +9,12 @@ on:
         required: false
         default: ''
       source_only:
+        description: 'Only build and publish sdist, skip wheels'
         type: boolean
         default: false
-
 permissions:
-  contents: write
+  contents: write   # needed to upload to GH Releases and push gh-pages
+  pages: write
   id-token: write
   actions: write
 
@@ -22,6 +22,11 @@ jobs:
   build-sdist:
     name: "📦 Source Distribution"
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      reuse_run_id: ${{ steps.pypi_check.outputs.reuse_run_id }}
     steps:
       - name: Check PyPI for existing sdist
         id: pypi_check
@@ -30,12 +35,17 @@ jobs:
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
           SDIST="uv_ffi-${VERSION}.tar.gz"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
           HTTP=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/uv-ffi/$VERSION/json")
           if [ "$HTTP" = "200" ]; then
             FOUND=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" | python3 -c "
           import sys,json; files=[f['filename'] for f in json.load(sys.stdin).get('urls',[])]
           print('found' if '${SDIST}' in files else 'missing')" 2>/dev/null)
-            [ "$FOUND" = "found" ] && echo "skip=true" >> $GITHUB_OUTPUT && exit 0
+            if [ "$FOUND" = "found" ]; then
+              echo "sdist already on PyPI - skipping"
+              echo "skip=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
           fi
           echo "skip=false" >> $GITHUB_OUTPUT
 
@@ -58,73 +68,440 @@ jobs:
           name: sdist
           path: sdist/
 
-  dispatch-builds:
-    name: "🚀 Dispatch wheel builds"
+  pypi-publish:
+    needs: build-sdist
+    name: Upload release to PyPI
     runs-on: ubuntu-latest
-    if: inputs.source_only != 'true'
-    outputs:
-      tag: ${{ steps.dispatch.outputs.tag }}
+    environment:
+      name: pypi
+      url: https://pypi.org/p/uv-ffi
+    permissions:
+      id-token: write
+      actions: write
+      contents: write
     steps:
-      - name: Checkout workflow files
+      - name: Checkout current workflow from HEAD
         uses: actions/checkout@v4
         with:
           ref: omnipkg-ffi-v0.10.8
           sparse-checkout: .github/workflows/
           sparse-checkout-cone-mode: false
 
-      - name: Dispatch or reuse build runs
-        id: dispatch
+      - name: Resolve tag and dispatch/find all three build workflows
+        if: inputs.source_only != 'true'
+        id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # ── Resolve tag ──────────────────────────────────────────
           if [ "${{ github.event_name }}" = "release" ]; then
             TAG="${{ github.event.release.tag_name }}"
           elif [ -n "${{ github.event.inputs.tag }}" ]; then
             TAG="${{ github.event.inputs.tag }}"
           else
             TAG=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
+            echo "No tag specified, using latest release: $TAG"
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Resolved tag: $TAG"
+
           BRANCH="omnipkg-ffi-v0.10.8"
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
 
           find_run() {
             local WF=$1
-            local RUN_IDS
-            RUN_IDS=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
-              --jq ".workflow_runs[] | select(.conclusion == \"success\") | .id")
-            for RUN_ID in $RUN_IDS; do
-              INPUT_TAG=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" --jq '.inputs.tag // ""' 2>/dev/null)
-              if [ "$INPUT_TAG" = "$TAG" ]; then
+            echo "  Scanning $WF for successful run with input tag=$TAG..." >&2
+            local IDS
+            IDS=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
+              --jq ".workflow_runs[] | select(.conclusion == \"success\") | .id" 2>/dev/null)
+            for RUN_ID in $IDS; do
+              RUN_INPUT_TAG=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" \
+                --jq '.inputs.tag // ""' 2>/dev/null)
+              echo "  run $RUN_ID input.tag=$RUN_INPUT_TAG" >&2
+              if [ "$RUN_INPUT_TAG" = "$TAG" ]; then
                 echo "$RUN_ID"
                 return
               fi
             done
           }
 
-          dispatch_and_record() {
+          dispatch_run() {
             local WF=$1
-            local EXISTING
-            EXISTING=$(find_run "$WF")
-            if [ -n "$EXISTING" ]; then
-              echo "  $WF → reusing run $EXISTING"
+            local BEFORE
+            BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            echo "  $WF → dispatching on $BRANCH with tag=$TAG..." >&2
+            gh api "repos/${{ github.repository }}/actions/workflows/$WF/dispatches" \
+              -f ref="$BRANCH" \
+              -f inputs[tag]="$TAG"
+            echo "$BEFORE" > "/tmp/before_${WF//\//_}"
+          }
+
+          find_or_dispatch() {
+            local WF=$1
+            local ID
+            ID=$(find_run "$WF")
+            if [ -n "$ID" ] && [ "$ID" != "null" ]; then
+              echo "  $WF → reusing existing run $ID" >&2
+              echo "$ID" > "/tmp/run_id_${WF//\//_}"
             else
-              BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-              gh api "repos/${{ github.repository }}/actions/workflows/$WF/dispatches" \
-                -f ref="$BRANCH" -f inputs[tag]="$TAG"
-              echo "  $WF → dispatched, waiting for run ID..."
-              ATTEMPTS=0
-              while true; do
-                NEW_ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=10" \
-                  --jq ".workflow_runs[] | select(.created_at > \"$BEFORE\") | .id" 2>/dev/null | head -1)
-                [ -n "$NEW_ID" ] && echo "  $WF → run $NEW_ID" && break
-                ATTEMPTS=$((ATTEMPTS+1))
-                [ $ATTEMPTS -gt 30 ] && echo "❌ timeout waiting for $WF run" && exit 1
-                sleep 10
-              done
+              dispatch_run "$WF"
             fi
           }
 
-          dispatch_and_record "build-wheels.yml"
-          dispatch_and_record "build-wheels-extended.yml"
-          dispatch_and_record "build-wheels-exotic.yml"
-          echo "✅ All three build workflows dispatched — publish-collect.yml will fire when they complete"
+          wait_for_dispatched() {
+            local WF=$1
+            if [ -f "/tmp/run_id_${WF//\//_}" ]; then return; fi
+            local BEFORE
+            BEFORE=$(cat "/tmp/before_${WF//\//_}")
+            local NEW_ID ATTEMPTS=0
+            while true; do
+              NEW_ID=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=10" \
+                --jq ".workflow_runs[] | select(.created_at > \"$BEFORE\") | .id" \
+                2>/dev/null | head -1)
+              if [ -n "$NEW_ID" ] && [ "$NEW_ID" != "null" ]; then
+                echo "  $WF → dispatched run $NEW_ID" >&2
+                echo "$NEW_ID" > "/tmp/run_id_${WF//\//_}"
+                return
+              fi
+              ATTEMPTS=$((ATTEMPTS+1))
+              echo "  waiting for $WF run to appear... attempt $ATTEMPTS" >&2
+              [ $ATTEMPTS -gt 60 ] && { echo "❌ Could not find dispatched run for $WF" >&2; exit 1; }
+              sleep 10
+            done
+          }
+
+          find_dispatched_run() {
+            local WF=$1
+            cat "/tmp/run_id_${WF//\//_}" 2>/dev/null
+          }
+
+          # Dispatch all three before waiting on any of them
+          find_or_dispatch "build-wheels.yml"
+          find_or_dispatch "build-wheels-extended.yml"
+          find_or_dispatch "build-wheels-exotic.yml"
+          wait_for_dispatched "build-wheels.yml"
+          wait_for_dispatched "build-wheels-extended.yml"
+          wait_for_dispatched "build-wheels-exotic.yml"
+
+          wait_for_run() {
+            local WF=$1
+            local ELAPSED=0
+            local ID
+            ID=$(find_dispatched_run "$WF")
+            while true; do
+              if [ -n "$ID" ] && [ "$ID" != "null" ]; then
+                STATUS=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.status')
+                CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/$ID" --jq '.conclusion // ""')
+                echo "  [${ELAPSED}s] $WF $ID: $STATUS/$CONCLUSION" >&2
+                if [ "$STATUS" = "completed" ]; then
+                  [ "$CONCLUSION" = "success" ] && { echo "$ID"; return; }
+                  echo "⚠️  $WF finished: $CONCLUSION (continuing anyway)" >&2
+                  echo "$ID"; return
+                fi
+              fi
+              sleep 30; ELAPSED=$((ELAPSED+30))
+            done
+          }
+
+          # Poll all three in parallel
+          STD_ID=$(wait_for_run "build-wheels.yml") &
+          STD_PID=$!
+          EXT_ID=$(wait_for_run "build-wheels-extended.yml") &
+          EXT_PID=$!
+          EXO_ID=$(wait_for_run "build-wheels-exotic.yml") &
+          EXO_PID=$!
+
+          wait $STD_PID || true
+          wait $EXT_PID || true
+          wait $EXO_PID || true
+
+          STD_ID=$(find_dispatched_run "build-wheels.yml")
+          EXT_ID=$(find_dispatched_run "build-wheels-extended.yml")
+          EXO_ID=$(find_dispatched_run "build-wheels-exotic.yml")
+
+          echo "std_run_id=$STD_ID" >> $GITHUB_OUTPUT
+          echo "ext_run_id=$EXT_ID" >> $GITHUB_OUTPUT
+          echo "exo_run_id=$EXO_ID" >> $GITHUB_OUTPUT
+          echo "Standard: $STD_ID  |  Extended: $EXT_ID  |  Exotic: $EXO_ID"
+
+      - name: Download standard wheels
+        if: inputs.source_only != 'true'
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: build-wheels.yml
+          run_id: ${{ steps.resolve.outputs.std_run_id }}
+          name: wheels-*
+          name_is_regexp: true
+          path: dist/
+          if_no_artifact_found: ignore
+        continue-on-error: true
+
+      - name: Download extended wheels
+        if: inputs.source_only != 'true'
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: build-wheels-extended.yml
+          run_id: ${{ steps.resolve.outputs.ext_run_id }}
+          name: ext-wheels-*
+          name_is_regexp: true
+          path: dist/
+          if_no_artifact_found: ignore
+        continue-on-error: true
+
+      - name: Download exotic wheels
+        if: inputs.source_only != 'true'
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: build-wheels-exotic.yml
+          run_id: ${{ steps.resolve.outputs.exo_run_id }}
+          name: exotic-wheels-*
+          name_is_regexp: true
+          path: dist/
+          if_no_artifact_found: ignore
+        continue-on-error: true
+
+      - name: Download sdist
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: publish.yml
+          run_id: ${{ needs.build-sdist.outputs.reuse_run_id || github.run_id }}
+          name: sdist
+          path: dist/
+          if_no_artifact_found: ignore
+        continue-on-error: true
+
+      - name: Flatten all wheels into dist/
+        run: |
+          find dist/ -name "*.whl" -exec mv {} dist/ \; 2>/dev/null || true
+          find dist/ -mindepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
+          find dist/ -name "*.attestation" -delete 2>/dev/null || true
+          echo "Total after flatten: $(find dist/ -name '*.whl' | wc -l) wheels"
+          ls -lh dist/ || true
+
+      # ── SPLIT: decide what goes to PyPI vs GH Releases ───────────
+      - name: Split wheels — PyPI (mainstream) vs GH Releases (exotic)
+        if: inputs.source_only != 'true'
+        run: |
+          mkdir -p dist-pypi dist-ghrelease
+
+          # PyPI gets: mainstream manylinux_2_28, manylinux_2_17 x86_64/aarch64,
+          #            musl x86_64/aarch64, macos arm64/x86_64, win amd64/arm64, sdist
+          # Everything else (i686, armv7, ppc64le, s390x, riscv64, universal2,
+          #                  win32, PyPy, GraalPy, freethreaded, wasm) → GH Releases
+          PYPI_KEEP=(
+            "*manylinux_2_28_x86_64*"
+            "*manylinux_2_28_aarch64*"
+            "*manylinux_2_17_x86_64*"
+            "*manylinux_2_17_aarch64*"
+            "*musllinux_1_2_x86_64*"
+            "*musllinux_1_2_aarch64*"
+            "*macosx_11_0_arm64*"
+            "*macosx_10_12_x86_64*"
+            "*win_amd64*"
+            "*win_arm64*"
+            "*.tar.gz"
+          )
+
+          for f in dist/*.whl dist/*.tar.gz; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f")
+            # Skip non-abi3 CPython, PyPy, GraalPy, freethreaded, non-universal2 mac
+            case "$name" in
+              *-pp[0-9]*) cp "$f" dist-ghrelease/; continue ;;
+              *-graalpy*) cp "$f" dist-ghrelease/; continue ;;
+              *-cp313t-*) cp "$f" dist-ghrelease/; continue ;;
+              *-cp3[0-9][0-9]-cp3[0-9][0-9]-*) cp "$f" dist-ghrelease/; continue ;;
+            esac
+            # Only abi3 wheels reach here — apply platform filter
+            matched=false
+            for pat in "${PYPI_KEEP[@]}"; do
+              case "$name" in
+                $pat) matched=true; break ;;
+              esac
+            done
+            if $matched; then
+              cp "$f" dist-pypi/
+            else
+              cp "$f" dist-ghrelease/
+            fi
+          done
+
+          echo "=== PyPI ($(ls dist-pypi/*.whl 2>/dev/null | wc -l) wheels + sdist) ==="
+          ls dist-pypi/ || true
+          echo ""
+          echo "=== GH Releases ($(ls dist-ghrelease/*.whl 2>/dev/null | wc -l) exotic wheels) ==="
+          ls dist-ghrelease/ || true
+
+      # ── Upload exotic wheels to GH Release ───────────────────────
+      - name: Upload exotic wheels to GitHub Release
+        if: inputs.source_only != 'true' && hashFiles('dist-ghrelease/*.whl') != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.resolve.outputs.tag }}
+          files: dist-ghrelease/*.whl
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Remove already-uploaded PyPI wheels ──────────────────────
+      - name: Remove wheels already on PyPI
+        if: inputs.source_only != 'true'
+        run: |
+          find dist-pypi/ -name "*.attestation" -delete 2>/dev/null || true
+          VERSION=$(find dist-pypi/ -name "*.whl" | head -1 | grep -oP '(?<=uv_ffi-)[0-9][^-]+' || true)
+          if [ -z "$VERSION" ]; then
+            VERSION=$(find dist-pypi/ -name "*.tar.gz" | head -1 | grep -oP '(?<=uv_ffi-)[0-9][^-]+(?:\.[a-z]+[0-9]+)?' || true)
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "Nothing in dist-pypi, nothing to upload"
+            exit 0
+          fi
+          echo "Checking PyPI for already-uploaded files at version $VERSION..."
+          EXISTING=$(curl -s "https://pypi.org/pypi/uv-ffi/$VERSION/json" \
+            | python3 -c "import sys,json; [print(f['filename']) for f in json.load(sys.stdin).get('urls',[])]" 2>/dev/null || true)
+          while IFS= read -r fname; do
+            [ -f "dist-pypi/$fname" ] && rm -f "dist-pypi/$fname" && echo "  Already on PyPI, skipping: $fname"
+          done <<< "$EXISTING"
+          echo ""
+          echo "Uploading $(ls dist-pypi/*.whl 2>/dev/null | wc -l) wheels + sdist to PyPI"
+          ls dist-pypi/ || true
+
+      - name: Copy sdist to dist-pypi (source_only mode)
+        if: inputs.source_only == 'true'
+        run: |
+          mkdir -p dist-pypi
+          cp dist/*.tar.gz dist-pypi/ 2>/dev/null || true
+          echo "source_only mode — uploading sdist only:"
+          ls dist-pypi/
+          
+      # ── Publish to PyPI ───────────────────────────────────────────
+      - name: Publish via OIDC (trusted publisher)
+        id: oidc
+        continue-on-error: true
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-pypi/
+          skip-existing: true
+
+      - name: Clean attestations after OIDC failure
+        if: steps.oidc.outcome == 'failure'
+        run: find dist-pypi/ -name "*.attestation" -delete 2>/dev/null || true
+
+      - name: Publish via API token (fallback)
+        if: steps.oidc.outcome == 'failure'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-pypi/
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+  update-wheel-index:
+    name: "📄 Update GH Pages wheel index"
+    needs: pypi-publish
+    runs-on: ubuntu-latest
+    if: always()
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Regenerate PEP 503 index
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'EOF'
+          import os, json, urllib.request
+
+          repo = os.environ["REPO"]
+          token = os.environ["GH_TOKEN"]
+
+          def gh(url):
+              req = urllib.request.Request(
+                  url, headers={"Authorization": f"token {token}",
+                  "Accept": "application/vnd.github+json"})
+              return json.loads(urllib.request.urlopen(req).read())
+
+          def pypi(pkg):
+              try:
+                  req = urllib.request.Request(f"https://pypi.org/pypi/{pkg}/json")
+                  data = json.loads(urllib.request.urlopen(req).read())
+                  out = []
+                  for ver, files in data["releases"].items():
+                      for f in files:
+                          if f["filename"].endswith(".whl"):
+                              out.append((ver, f["filename"], f["url"]))
+                  return out
+              except Exception as e:
+                  print(f"PyPI fetch failed: {e}")
+                  return []
+
+          # GH Release exotic wheels
+          gh_wheels = []
+          page = 1
+          while True:
+              releases = gh(f"https://api.github.com/repos/{repo}/releases?per_page=50&page={page}")
+              if not releases:
+                  break
+              for rel in releases:
+                  for asset in rel.get("assets", []):
+                      if asset["name"].endswith(".whl"):
+                          gh_wheels.append((rel["tag_name"], asset["name"], asset["browser_download_url"]))
+              page += 1
+
+          # PyPI mainstream wheels
+          pypi_wheels = pypi("uv-ffi")
+
+          # Deduplicate by filename — GH Release wins if same name exists both places
+          seen = {}
+          for tag, name, url in pypi_wheels:
+              seen[name] = (tag, name, url)
+          for tag, name, url in gh_wheels:
+              seen[name] = (tag, name, url)  # GH overrides
+
+          all_wheels = sorted(seen.values(), key=lambda x: (x[0], x[1]))
+
+          os.makedirs("uv-ffi", exist_ok=True)
+
+          links = "\n".join(
+              f'  <a href="{url}" data-requires-python=">=3.8">{name}</a><br>'
+              for _, name, url in all_wheels
+          )
+
+          with open("uv-ffi/index.html", "w") as f:
+              f.write(f"""<!DOCTYPE html>
+              <html>
+                <head><title>Links for uv-ffi</title></head>
+                <body>
+                  <h1>Links for uv-ffi</h1>
+              {links}
+                </body>
+              </html>
+              """)
+              
+          with open("index.html", "w") as f:
+              f.write(f"""<!DOCTYPE html>
+              <html>
+                <head><title>uv-ffi wheel index</title></head>
+                <body>
+                  <h1>uv-ffi wheel index</h1>
+                  <p>Mainstream wheels: <a href="https://pypi.org/project/uv-ffi/">PyPI</a></p>
+                  <p>Exotic platform wheels hosted here. Install any platform:</p>
+                  <pre>pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/</pre>
+                  <p><a href="uv-ffi/">Browse all {len(all_wheels)} wheels →</a></p>
+                </body>
+              </html>
+              """)
+
+          print(f"Indexed {len(all_wheels)} total wheels ({len(pypi_wheels)} PyPI + {len(gh_wheels)} GH Releases)")
+          EOF
+
+      - name: Commit and push index
+        run: |
+          git config user.name "wheel-index[bot]"
+          git config user.email "wheel-index[bot]@users.noreply.github.com"
+          git add index.html uv-ffi/index.html
+          git diff --staged --quiet && echo "No changes to index" && exit 0
+          git commit -m "Update wheel index for ${{ needs.pypi-publish.outputs.tag || github.ref_name }}"
+          git push origin gh-pages
