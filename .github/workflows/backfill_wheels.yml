@@ -23,7 +23,7 @@ jobs:
       - name: Run backfill
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          PYPI_API_TOKEN: ${{ secrets.OMNIPKG_DEPLOY_KEY }}
           REPO: ${{ github.repository }}
           DRY_RUN: ${{ inputs.dry_run }}
           MAX_PAGES: ${{ inputs.max_pages }}
@@ -334,7 +334,9 @@ jobs:
                           print(f"    ✅ uploaded {len(whl_files)} wheels for {version}")
                           pypi_uploaded += len(whl_files)
                       else:
-                          print(f"    ❌ twine failed: {result.stderr[-500:]}")
+                          print(f"    ❌ twine failed (rc={result.returncode})")
+                          print(f"    STDOUT: {result.stdout[-2000:]}")
+                          print(f"    STDERR: {result.stderr[-2000:]}")
                           pypi_failed += len(whl_files)
 
               if not dry_run:
