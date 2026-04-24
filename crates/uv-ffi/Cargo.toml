@@ -45,3 +45,8 @@ uv-install-wheel = { path = "../uv-install-wheel" }
 anyhow = "1"
 dirs = "5"
 uv-platform-tags = { path = "../uv-platform-tags" }
+
+
+[profile.release]
+codegen-units = 1
+lto = false
