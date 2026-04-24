@@ -89,11 +89,15 @@ jobs:
 
           find_run() {
             local WF=$1
-            gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
-              --jq ".workflow_runs[] | select(.conclusion == \"success\") | .id" 2>/dev/null | \
-            while read RUN_ID; do
+            local RUN_IDS
+            RUN_IDS=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
+              --jq ".workflow_runs[] | select(.conclusion == \"success\") | .id")
+            for RUN_ID in $RUN_IDS; do
               INPUT_TAG=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" --jq '.inputs.tag // ""' 2>/dev/null)
-              [ "$INPUT_TAG" = "$TAG" ] && echo "$RUN_ID" && return
+              if [ "$INPUT_TAG" = "$TAG" ]; then
+                echo "$RUN_ID"
+                return
+              fi
             done
           }
 
