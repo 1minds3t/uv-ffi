@@ -494,17 +494,24 @@ fn run_uv(cmd: &str) -> (i32, Option<Changelog>, String) {
         return (rc, changelog, err);
     }
 
-    // AGGRESSIVE HEAL: If any install fails, the registry might be stale.
-    // We retry EXACTLY once after clearing the cache.
     if cmd.contains("install") {
+        // Stale site-packages cache: uv tried to read dist-info that no longer
+        // exists on disk (external deletion, bubble swap, etc).
+        // Force a full rescan so the next attempt sees disk reality.
+        if err.contains("dist-info") && err.contains("No such file or directory") {
+            eprintln!("[UV-FFI] Stale site-packages cache detected (dist-info missing). Forcing rescan and retrying...");
+            uv::FORCE_RESCAN.store(true, std::sync::atomic::Ordering::SeqCst);
+            return run_uv_internal(cmd);
+        }
+
+        // Registry cache stale: newly published package version not in RAM.
+        // Clear the registry client and retry once.
         if is_profile_enabled() {
             eprintln!("[UV-FFI] Install failed (rc={}). Forcing registry reset and retrying...", rc);
         }
-
         if let Ok(mut g) = uv::REGISTRY_CLIENT.lock() {
             *g = None;
         }
-
         return run_uv_internal(cmd);
     }
 
