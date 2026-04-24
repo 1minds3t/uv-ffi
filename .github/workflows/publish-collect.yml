@@ -39,23 +39,21 @@ jobs:
           TRIGGERING_WF="${{ github.event.workflow_run.name }}"
           echo "Triggered by: $TRIGGERING_WF ($TRIGGERING_RUN)"
 
-          # Get the input tag from the triggering run
-          TAG=$(gh api "repos/${{ github.repository }}/actions/runs/$TRIGGERING_RUN" \
-            --jq '.inputs.tag // ""' 2>/dev/null)
-          echo "Tag from triggering run: $TAG"
-
+          find_latest_run() {
+            local WF=$1
+            gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=5&status=success" \
+              --jq ".workflow_runs[0].id" 2>/dev/null
+          }
+          
+          STD=$(find_latest_run "build-wheels.yml")
+          EXT=$(find_latest_run "build-wheels-extended.yml")
+          EXO=$(find_latest_run "build-wheels-exotic.yml")
+          
           # Try inputs first (manual dispatch), then fall back to querying the triggering run
           TAG="${{ inputs.tag }}"
           if [ -z "$TAG" ]; then
             TAG=$(gh api "repos/${{ github.repository }}/actions/runs/$TRIGGERING_RUN" \
               --jq '.inputs.tag // ""' 2>/dev/null)
-          fi
-
-          # If no tag in inputs (e.g. triggered without tag), abort
-          if [ -z "$TAG" ]; then
-            echo "No tag found on triggering run — skipping"
-            echo "all_done=false" >> $GITHUB_OUTPUT
-            exit 0
           fi
 
           find_completed_run() {
