@@ -2,6 +2,10 @@
 name: Collect & Publish uv-ffi to PyPI
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to collect (e.g. v0.10.8)'
+        required: true
   workflow_run:
     workflows:
       - "🔧 Build uv-ffi Wheels"
@@ -39,6 +43,13 @@ jobs:
           TAG=$(gh api "repos/${{ github.repository }}/actions/runs/$TRIGGERING_RUN" \
             --jq '.inputs.tag // ""' 2>/dev/null)
           echo "Tag from triggering run: $TAG"
+
+          # Try inputs first (manual dispatch), then fall back to querying the triggering run
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh api "repos/${{ github.repository }}/actions/runs/$TRIGGERING_RUN" \
+              --jq '.inputs.tag // ""' 2>/dev/null)
+          fi
 
           # If no tag in inputs (e.g. triggered without tag), abort
           if [ -z "$TAG" ]; then
