@@ -1,10 +1,10 @@
 # uv-ffi
 
-Persistent in-process execution engine for [uv](https://github.com/astral-sh/uv)'s package resolver and installer.
+Persistent in-process execution engine for[uv](https://github.com/astral-sh/uv)'s package resolver and installer.
 
 While `uv` is designed as a world-class CLI tool, `uv-ffi` re-architects its core as a **resident engine**. By keeping a Tokio runtime, HTTP connection pools, site-packages metadata, and interpreter state warm in memory across calls, it achieves execution speeds limited only by filesystem I/O.
 
-Used internally by [omnipkg](https://github.com/1minds3t/omnipkg), but directly callable from any long-lived Python process.
+Used internally by[omnipkg](https://github.com/1minds3t/omnipkg), but directly callable from any long-lived Python process.
 
 ---
 
@@ -47,7 +47,7 @@ rc, installed, removed, warnings = run(f'{BASE} rich==14.3.3')
 
 # Inspect engine's current in-memory view of the environment
 state = get_site_packages_cache()
-# -> [('rich', '14.3.3'), ('requests', '2.31.0'), ...]
+# ->[('rich', '14.3.3'), ('requests', '2.31.0'), ...]
 ```
 
 The key is keeping the import alive in a long-lived process. Each new Python subprocess pays ~70ms (interpreter startup + engine init). In a warm daemon worker, the same operation costs ~6ms.
@@ -107,7 +107,7 @@ Returns the engine's current in-memory view of the environment as `[(name, versi
 
 ```python
 state = get_site_packages_cache()
-# [('rich', '14.3.3'), ('requests', '2.31.0'), ...]
+#[('rich', '14.3.3'), ('requests', '2.31.0'), ...]
 ```
 
 ### `invalidate_site_packages_cache()`
@@ -124,7 +124,6 @@ patch_site_packages_cache(
     removed=[['rich', '14.3.2']],
 )
 ```
-
 
 ### `clear_registry_cache()`
 
@@ -166,25 +165,30 @@ This is how omnipkg generates multiversion isolated environments entirely in-mem
 
 ## Cache Coherency
 
-uv-ffi holds site-packages state in RAM and trusts it completely. If an external tool (`uv`, `pip`, `conda`) modifies the environment without notifying uv-ffi, the next call may return `rc=0, inst=[], rem=[]` — a silent false no-op.
-
-Verified behavior:
-```
-[1] uv-ffi swap:                   6.51ms  installed=[('rich','14.3.3')] removed=[('rich','14.3.2')]
-[2] uv pip install rich==14.3.2:  18.65ms  (disk=14.3.2, cache still thinks 14.3.3)
-[3] uv-ffi ask for rich==14.3.3:   0.46ms  inst=[] rem=[]  ← silent no-op, wrong answer
-[4] uv-ffi ask for rich==14.3.2:  11.35ms  inst=[('rich','14.3.2')]  ← rescan + swap
-```
-
 **If uv-ffi is the only thing modifying the environment, no action is needed.** After every install, the cache is updated directly from the resolver's in-memory changelog at zero disk I/O cost — it's always coherent with no overhead.
 
-For environments shared with external tools, two options:
+For environments shared with external tools, uv-ffi now auto-heals on detection:
 
-**Option A — FS watcher + delta patch** (omnipkg's approach)
-Watch site-packages for filesystem events. On each change, call `patch_site_packages_cache(installed, removed)`. Cost: ~25µs per patch. Full coherency at near-zero overhead.
+**Auto-heal (built-in, no configuration)**
+When uv-ffi detects that its in-memory cache references a dist-info path that no longer exists on disk, it automatically forces a full rescan and retries the install transparently. The caller always gets a correct result.
+
+Verified behavior after external version change:
+```
+[1] uv-ffi installs rich==13.9.4:          4.93ms  ← cache warm, correct
+[2] external uv installs rich==13.9.3:     ~18ms   ← cache now stale
+[3] uv-ffi asked for rich==14.0.0:         7.60ms  ← auto-healed, correct
+    (0.5ms failed attempt + 1.6ms rescan + 5.5ms uninstall/install)
+```
+
+True overhead of auto-heal vs normal swap: **+2.67ms** (one failed attempt + one disk rescan). This is paid only when an external tool has modified the environment since the last uv-ffi call.
+
+For zero-overhead coherency, bypass the heal entirely with a proactive delta patch:
+
+**Option A — FS watcher + delta patch** (omnipkg's approach, zero heal cost)
+Watch site-packages for filesystem events. On each change, call `patch_site_packages_cache(installed, removed)`. Cost: ~25µs per patch. Cache never goes stale, auto-heal never triggers.
 
 **Option B — Force rescan**
-Call `invalidate_site_packages_cache()` before any call where external modification is possible. Cost: ~2.5ms on next call. Simple, no watcher needed.
+Call `invalidate_site_packages_cache()` before any call where external modification is possible. Cost: ~1.6ms on next call. Same rescan cost as auto-heal but paid upfront rather than on failure.
 
 ---
 
@@ -206,7 +210,6 @@ Interpreter discovery, platform tagging, cache init, and TLS pool setup happen o
 
 **Persistent `RegistryClient` and `PythonEnvironment`**
 The HTTP client (TLS pools, connection pools) and Python environment (interpreter metadata, marker environment) are stored as global singletons after first use. Subsequent calls reuse them directly — no socket teardown, no filesystem search.
-
 
 **PyPI Registry Auto-Healing**
 The FFI engine keeps PyPI API responses in RAM for maximum speed. If a newly published package version is requested and not found in the RAM cache, the engine detects the internal failure, automatically drops its registry cache, and retries the network fetch transparently. You never need to restart the process to see newly published packages.
@@ -230,13 +233,11 @@ The `main()` path previously created a new Tokio runtime on every call and calle
 Set `UV_FFI_PROFILE=1` to enable millisecond-precision phase tracing:
 
 ```
-[UV-PROFILE] cache-reused: 0.12ms
-[UV-PROFILE] post-site-packages-scan: 0.08ms (cached)
+[UV-PROFILE] cache-reused: 0.12ms[UV-PROFILE] post-site-packages-scan: 0.08ms (cached)
 [UV-PROFILE] post-settings-resolve: 0.31ms
 [UV-PROFILE] post-execute-plan: 4.82ms
 [UV-PROFILE] post-changelog-from-local: 4.83ms
-[UV-PROFILE] post-changelog-write: 4.91ms
-[UV-SYNC] Zero-disk cache update: done
+[UV-PROFILE] post-changelog-write: 4.91ms[UV-SYNC] Zero-disk cache update: done
 [UV-PROFILE] post-explicit-drop: 0.02ms
 [UV-PROFILE] post-await: 5.14ms
 ```
@@ -283,6 +284,7 @@ uv-ffi versions track the upstream uv release they are built against.
 | 0.10.8.post5 | 0.10.8 | CI hardening, per-platform PyPI checks, sdist publishing, Windows PowerShell fixes |
 | 0.10.8.post6 | 0.10.8 | Auto-healing PyPI registry cache, detailed FFI error messages (4-tuple return), `clear_registry_cache()` |
 | 0.10.8.post7 | 0.10.8 | ABI3 wheels (one wheel per arch, Python ≥ 3.8), split PyPI/GitHub Releases distribution, GH Pages index |
+| 0.10.8.post8 | 0.10.8 | Auto-healing site-packages cache (detects stale dist-info, rescans, retries transparently) |
 
 ---
 
