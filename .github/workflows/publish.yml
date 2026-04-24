@@ -480,8 +480,8 @@ jobs:
               </html>
               """)
               
-                        with open("index.html", "w") as f:
-                            f.write(f"""<!DOCTYPE html>
+          with open("index.html", "w") as f:
+              f.write(f"""<!DOCTYPE html>
               <html>
                 <head><title>uv-ffi wheel index</title></head>
                 <body>
