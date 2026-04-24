@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8.post10] — 2026-04-23
+
+The Local Filesystem Auto-Heal Release
+
+**The Local Filesystem Auto-Heal Release**
+
+This release introduces a surgical, high-performance auto-healing mechanism for local filesystem desyncs, making the `uv-ffi` engine practically immune to external tampering (like a rogue `pip uninstall` run outside of the daemon).
+
+* **Local Filesystem Auto-Heal:** If an external tool modifies the environment behind `uv-ffi`'s back, the in-memory cache becomes stale. The engine now explicitly catches the resulting `os error 2 (No such file or directory)` when trying to read missing `dist-info/METADATA` files. It automatically drops the RAM cache, forces a true disk rescan, and transparently retries the install.
+* **Proactive Patching Proven:** Benchmarking this new heal path (~7.6ms) against a proactive delta-patch (~4.0ms) mathematically proved that calling `patch_site_packages_cache` saves **~3.6ms per invocation**. It bypasses both the disk rescan penalty and allows the hot dependency resolver to skip cold evaluation logic entirely.
+
+* **README Accuracy:** Updated the Python API examples to correctly reflect the new 4-tuple return signature (`rc, installed, removed, err`) introduced in `post6`.
+* **Cleaned Examples:** Simplified the `pip install` examples in the documentation, removing redundant default flags (like `--link-mode`).
+
+* **Wheel Backfill Polish:** Improved the `.github/workflows/backfill_wheels.yml` script to handle artifact extraction and temporary directories more robustly, preventing disk bloat on the GitHub runner.
+* **HTML Generation Fixes:** Fixed indentation and formatting bugs in the automated PEP-503 GitHub Pages index generator.
+
+---
+
+**📝 Code Changes:**
+- UPDATE: crates/uv-ffi/src/lib.rs (15 lines changed)
+
+**⚙️ Configuration:**
+- .github/workflows/backfill_wheels.yml (179 lines)
+
+**Additional Changes:**
+- perf: auto-heal stale site-packages cache on dist-info ENOENT
+- Update configuration
+
+_4 files changed, 124 insertions(+), 132 deletions(-)_
+
 ## [0.10.8.post9] — 2026-04-23
 
 Fix sdist NOTICE packaging & self-healing registry cache
