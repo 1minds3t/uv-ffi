@@ -36,18 +36,14 @@ If the Rust build fails, pre-built wheels for your platform are almost certainly
 from uv_ffi import run, invalidate_site_packages_cache, patch_site_packages_cache, get_site_packages_cache, clear_registry_cache
 
 PY = '/path/to/your/python'
-BASE = f'pip install --python {PY} --link-mode symlink'
+BASE = f'pip install --python {PY}'  # no --link-mode, copies by default
 
 # First call initializes the engine (~65-75ms, one-time cost)
-rc, installed, removed = run(f'{BASE} rich==14.3.2')
+rc, installed, removed, warnings = run(f'{BASE} rich==14.3.2')
 
 # Subsequent calls use the warm engine (~5-6ms)
-rc, installed, removed = run(f'{BASE} rich==14.3.3')
+rc, installed, removed, warnings = run(f'{BASE} rich==14.3.3')
 # -> installed=[('rich', '14.3.3')] removed=[('rich', '14.3.2')]
-
-# Isolated install into a target directory (bubble install)
-rc, installed, removed = run(f'pip install --python {PY} --target /tmp/myenv rich==14.3.2')
-# Main site-packages cache is untouched
 
 # Inspect engine's current in-memory view of the environment
 state = get_site_packages_cache()
