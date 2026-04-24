@@ -36,7 +36,7 @@ If the Rust build fails, pre-built wheels for your platform are almost certainly
 from uv_ffi import run, invalidate_site_packages_cache, patch_site_packages_cache, get_site_packages_cache, clear_registry_cache
 
 PY = '/path/to/your/python'
-BASE = f'pip install --python {PY}'  # no --link-mode, copies by default
+BASE = f'pip install --python {PY}'  # LinkMode::Symlink);  // ← by default
 
 # First call initializes the engine (~65-75ms, one-time cost)
 rc, installed, removed, warnings = run(f'{BASE} rich==14.3.2')
@@ -96,7 +96,7 @@ The ~5–6ms floor on a real swap is the hardware limit — VFS symlink create/u
 Execute a uv command in-process. Returns `(exit_code, installed, removed)` where installed/removed are lists of `(name, version)` tuples.
 
 ```python
-rc, installed, removed = run('pip install --python /usr/bin/python3 rich==14.3.3')
+rc, installed, removed, err = run('pip install --python /usr/bin/python3 rich==14.3.3')
 ```
 
 Supports all flags omnipkg uses on the fast path: `--python`, `--link-mode`, `--target`, `--index-url`, `--extra-index-url`, `--reinstall`, `-q`. Any unrecognized flag falls back to the full clap parse path automatically.
