@@ -28,6 +28,7 @@ jobs:
           REPO: ${{ github.repository }}
           DRY_RUN: ${{ inputs.dry_run }}
           MAX_PAGES: ${{ inputs.max_pages }}
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
           pip install requests --quiet
 
@@ -241,6 +242,90 @@ jobs:
               # DELETE immediately — do not accumulate on disk
               shutil.rmtree(art_dir, ignore_errors=True)
               print(f"   🗑️  disk cleared")
+
+          # ── PyPI backfill pass ──────────────────────────────────────
+          print(f"\n{'='*60}")
+          print("PyPI backfill pass...")
+          print(f"{'='*60}")
+
+          import re as _re
+
+          PYPI_PLAT_KEEP = [
+              r"manylinux_2_28_x86_64", r"manylinux_2_28_aarch64",
+              r"manylinux_2_17_x86_64", r"manylinux_2_17_aarch64",
+              r"musllinux_1_2_x86_64",  r"musllinux_1_2_aarch64",
+              r"macosx_11_0_arm64",     r"macosx_10_12_x86_64",
+              r"win_amd64",             r"win_arm64",
+          ]
+
+          def pypi_eligible(name):
+              # exclude PyPy, GraalPy, freethreaded, per-version abi
+              if _re.search(r"-pp\d|-graalpy|-cp313t-|-cp3\d\d-cp3\d\d-", name):
+                  return False
+              return any(_re.search(p, name) for p in PYPI_PLAT_KEEP)
+
+          def get_pypi_filenames(version):
+              try:
+                  req = urllib.request.Request(f"https://pypi.org/pypi/uv-ffi/{version}/json")
+                  data = json.loads(urllib.request.urlopen(req).read())
+                  return {f["filename"] for f in data.get("urls", [])}
+              except:
+                  return set()
+
+          if not dry_run:
+              import subprocess, shutil
+              subprocess.run(["pip", "install", "twine", "--quiet"], check=True)
+
+              # gather all wheels from all GH releases
+              pypi_todo = {}  # version -> list of (tag, asset_name, download_url)
+              for tag, rel_id in releases_map.items():
+                  version = tag.lstrip("v")
+                  assets = gh(f"releases/{rel_id}/assets?per_page=100") or []
+                  for asset in assets:
+                      name = asset["name"]
+                      if not name.endswith(".whl"):
+                          continue
+                      if not pypi_eligible(name):
+                          continue
+                      pypi_todo.setdefault(version, []).append((tag, name, asset["browser_download_url"]))
+
+              pypi_uploaded = pypi_skipped = pypi_failed = 0
+              for version, wheels in sorted(pypi_todo.items()):
+                  existing = get_pypi_filenames(version)
+                  to_upload = [w for w in wheels if w[1] not in existing]
+                  if not to_upload:
+                      print(f"  {version}: all {len(wheels)} wheels already on PyPI")
+                      pypi_skipped += len(wheels)
+                      continue
+                  print(f"  {version}: {len(to_upload)} wheels to upload ({len(wheels)-len(to_upload)} already there)")
+                  with tempfile.TemporaryDirectory() as td:
+                      for tag, name, url in to_upload:
+                          dest = os.path.join(td, name)
+                          try:
+                              urllib.request.urlretrieve(url, dest)
+                          except Exception as e:
+                              print(f"    download failed {name}: {e}")
+                              pypi_failed += 1
+                              continue
+                      whl_files = list(Path(td).glob("*.whl"))
+                      if not whl_files:
+                          continue
+                      result = subprocess.run(
+                          ["twine", "upload", "--skip-existing", "--non-interactive", *[str(w) for w in whl_files]],
+                          env={**os.environ, "TWINE_USERNAME": "__token__", "TWINE_PASSWORD": os.environ["PYPI_API_TOKEN"]},
+                          capture_output=True, text=True
+                      )
+                      if result.returncode == 0:
+                          print(f"    ✅ uploaded {len(whl_files)} wheels for {version}")
+                          pypi_uploaded += len(whl_files)
+                      else:
+                          print(f"    ❌ twine failed: {result.stderr[-500:]}")
+                          pypi_failed += len(whl_files)
+
+              print(f"\nPyPI: uploaded={pypi_uploaded} skipped={pypi_skipped} failed={pypi_failed}")
+          else:
+              print("[DRY RUN] would check GH releases and push missing wheels to PyPI")
+
 
           print(f"\n{'='*60}")
           if dry_run:
