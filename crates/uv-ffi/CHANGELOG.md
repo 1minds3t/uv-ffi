@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8.post11] — 2026-04-24
+
+PiWheels and ARM Optimization
+
+v0.10.8.post11
+This release focuses on CI/CD infrastructure improvements and build reliability fixes, particularly for resource-constrained build environments like piwheels.
+Build Fixes
+	•	Added lower memory build settings to Cargo.toml to prevent OOM crashes on piwheels for Python 3.13 aarch64 builds
+CI/CD Overhaul
+	•	Completely refactored the publish workflow — wheels now go to both GitHub Releases and PyPI
+	•	Added new publish-collect.yml workflow that waits for all three platform builds to succeed before publishing, preventing partial releases
+	•	Improved backfill workflow to target both GitHub Releases and PyPI with better artifact handling
+	•	Switched from PYPI_API_TOKEN to OMNIPKG_DEPLOY_KEY for PyPI authentication
+	•	Enhanced error logging for upload failures to make debugging easier
+	•	Added workflow_dispatch trigger and tag input to publish-collect for manual runs
+Infra
+	•	Refactored find_run to handle multiple RUN_IDs
+	•	Added functions to locate latest successful workflow runs for backfill targeting
+
+---
+
+**⚙️ Configuration:**
+- crates/uv-ffi/Cargo.toml (5 lines)
+
+_4 files changed, 667 insertions(+), 337 deletions(-)_
+
 ## [0.10.8.post10] — 2026-04-23
 
 The Local Filesystem Auto-Heal Release
