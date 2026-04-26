@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8.post12] — 2026-04-26
+
+The "PiWheels Survival & Global Index" Release
+
+This release brings massive improvements to memory-constrained builds (solving the dreaded 32-bit LLVM Out-Of-Memory crashes) and fully launches our PEP 503-compliant Extended Wheel Index on GitHub Pages.
+
+*   **Fixed LLVM OOMs on 32-bit architectures:** Applied a strict memory-safe `[profile.release]` to the workspace root (where Cargo actually respects it).
+*   **Disabled LTO & Chunked Codegen:** Set `lto = false` and `codegen-units = 16` to prevent the compiler from exhausting the 3GB 32-bit address space during the final linking phase.
+*   **Binary Shrinkage:** Added `opt-level = "s"`, `panic = "abort"`, and `strip = true`. This drops peak RSS RAM usage during compilation by gigabytes and shrinks the final `.so` binary size from ~55MB down to <15MB.
+
+*   **Fully Functional PEP 503 Index:** The CI now generates a static, pip-compatible HTML index and deploys it directly to GitHub Pages (`https://1minds3t.github.io/uv-ffi/`).
+*   **Fixed API Pagination (The Ghost Asset Bug):** Refactored the `backfill_wheels.yml` script to properly paginate through the GitHub Releases API. All 600+ exotic wheels are now correctly discovered and indexed (bypassing the 100-item hard limit).
+*   **macOS Optimization:** Filtered out redundant macOS `x86_64` and `arm64` wheels from the index in favor of the `universal2` binaries to reduce index bloat.
+
+*   **Conda-Forge Recipe Added:** Shipped the initial `meta.yaml` to prepare `uv-ffi` for official distribution on the `conda-forge` channel.
+*   **Smarter Build Fallbacks:** Updated the `build.rs` compile-time warnings and `README.md` to explicitly map out which architectures are served from PyPI (Mainstream ABI3) vs. our Extended Index (musllinux, armv7, riscv64, s390x, ppc64le, PyPy, 3.13t).
+
+---
+
+**📝 Code Changes:**
+- UPDATE: crates/uv-ffi/build.rs (10 lines changed)
+
+**⚙️ Configuration:**
+- Cargo.toml (7 lines)
+- crates/uv-ffi/Cargo.toml (8 lines)
+- crates/uv-ffi/pyproject.toml (2 lines)
+
+**Additional Changes:**
+- chore: Update configuration
+- chore: apply strict memory-safe release profile to workspace root for PiWheels
+- chore: optimize release profiles to fix ARM32 OOMs and reduce binary size
+
+**Updates:**
+- Update README with link to browse all wheels
+- Update backfill_wheels.yml to exclude specific wheels
+
+_8 files changed, 147 insertions(+), 67 deletions(-)_
+
 ## [0.10.8.post11] — 2026-04-24
 
 PiWheels and ARM Optimization
