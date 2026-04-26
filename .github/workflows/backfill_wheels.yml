@@ -166,10 +166,10 @@ jobs:
                       if len(batch) < 100:
                           break
                       assets_pg += 1
-                  names  = set()
+                  names  = {}
                   for a in assets:
                       if a["name"].endswith(".whl"):
-                          names.add(a["name"])
+                          names[a["name"]] = a["browser_download_url"]
                           if a["updated_at"] > latest_asset_ts:
                               latest_asset_ts = a["updated_at"]
                   release_assets[rid] = names
@@ -254,7 +254,7 @@ jobs:
                                   print(f"    ⬆️  {tag} ← {wname}")
                                   if gh_upload(rid, str(whl)):
                                       print(f"    ✅ {wname}")
-                                      existing.add(wname)
+                                      existing[wname] = ""
                                       uploaded_names.add(wname)
                                       art_uploaded += 1
                                   else:
@@ -289,11 +289,7 @@ jobs:
                   return set()
 
           def get_asset_download_url(release_id, filename):
-              assets = gh(f"releases/{release_id}/assets?per_page=100") or []
-              for a in assets:
-                  if a["name"] == filename:
-                      return a["browser_download_url"]
-              return None
+              return release_assets.get(release_id, {}).get(filename)
 
           if not dry_run and not pypi_tok:
               print("No PYPI_API_TOKEN — skipping PyPI upload")
@@ -350,22 +346,21 @@ jobs:
                       for wf_ in whl_files:
                           strip_license_file(wf_)
 
-                      result = subprocess.run(
-                          ["twine", "upload", "--skip-existing", "--non-interactive",
-                           *[str(w) for w in whl_files]],
-                          env={**os.environ,
-                               "TWINE_USERNAME": "__token__",
-                               "TWINE_PASSWORD": pypi_tok},
-                          capture_output=True, text=True
-                      )
-                      if result.returncode == 0:
-                          print(f"    ✅ uploaded {len(whl_files)} wheels for {version}")
-                          pypi_uploaded += len(whl_files)
-                      else:
-                          print(f"    ❌ twine failed (rc={result.returncode})")
-                          print(f"    STDOUT: {result.stdout[-2000:]}")
-                          print(f"    STDERR: {result.stderr[-2000:]}")
-                          pypi_failed += len(whl_files)
+                      for wf_ in whl_files:
+                          result = subprocess.run(
+                              ["twine", "upload", "--skip-existing", "--non-interactive", str(wf_)],
+                              env={**os.environ,
+                                   "TWINE_USERNAME": "__token__",
+                                   "TWINE_PASSWORD": pypi_tok},
+                              capture_output=True, text=True
+                          )
+                          if result.returncode == 0:
+                              print(f"    ✅ {wf_.name}")
+                              pypi_uploaded += 1
+                          else:
+                              print(f"    ❌ {wf_.name} (rc={result.returncode})")
+                              print(f"    STDOUT: {result.stdout[-500:]}")
+                              pypi_failed += 1
 
               if not dry_run:
                   print(f"\nPyPI: uploaded={pypi_uploaded} skipped={pypi_skipped} failed={pypi_failed}")
