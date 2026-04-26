@@ -56,6 +56,10 @@ jobs:
           def pypi_eligible(name):
               if re.search(r"-pp\d|-graalpy|-cp313t-", name):
                   return False
+              if re.search(r"macosx_10_12_x86_64\.whl$", name):
+                  return False
+              if re.search(r"macosx_11_0_arm64\.whl$", name):
+                  return False
               return any(re.search(p, name) for p in PYPI_PLAT_KEEP)
 
           def strip_license_file(whl_path):
@@ -410,7 +414,8 @@ jobs:
               if not rels:
                   break
               for rel in rels:
-                  for a in rel.get("assets", []):
+                  assets_url = f"https://api.github.com/repos/{repo}/releases/{rel['id']}/assets?per_page=100"
+                  for a in gh(assets_url) or []:
                       if a["name"].endswith(".whl"):
                           gh_wheels.append((rel["tag_name"], a["name"], a["browser_download_url"]))
               page += 1
