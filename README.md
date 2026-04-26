@@ -11,6 +11,7 @@ pip install uv-ffi
 # Exotic platforms — musl Alpine, armv7, riscv64, s390x, free-threaded, PyPy, GraalPy
 pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/
 ```
+**[→ Browse all wheels](https://1minds3t.github.io/uv-ffi/)** — PyPI wheels + 600+ additional wheels hosted on GitHub Releases
 
 The extra index combines PyPI wheels + 400+ additional wheels hosted on GitHub Releases, covering every target the PyPI 10 GB limit forced out. If `pip` can't find a wheel for your platform on PyPI, it'll find it there.
 
