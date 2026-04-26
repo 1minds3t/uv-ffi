@@ -14,7 +14,8 @@ Used internally by [omnipkg](https://github.com/1minds3t/omnipkg), but directly 
 ```bash
 pip install uv-ffi
 ```
-Covers Linux x86_64/aarch64, macOS arm64/x86_64/universal2, Windows amd64/arm64 — all via ABI3 wheels (Python ≥ 3.8).
+Covers Linux x86_64/aarch64, macOS universal2 (arm64+x86_64), Windows amd64/arm64 — all via ABI3 wheels (Python ≥ 3.8).
+macOS users wanting native-only wheels (smaller download, no Rosetta overhead) can use the extra-index-url above.
 
 ### Exotic platforms (musl Alpine, armv7, riscv64, s390x, ppc64le, free-threaded CPython 3.13t, PyPy, GraalPy, Windows x86)
 ```bash
@@ -27,6 +28,7 @@ pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/
 ### Build from source (requires Rust toolchain)
 ```bash
 pip install uv-ffi --no-binary uv-ffi
+
 ```
 If the Rust build fails, pre-built wheels for your platform are almost certainly available via the extra-index-url above.
 
