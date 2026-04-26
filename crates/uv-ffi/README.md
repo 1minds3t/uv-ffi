@@ -1,10 +1,10 @@
 # uv-ffi
 
-Persistent in-process execution engine for[uv](https://github.com/astral-sh/uv)'s package resolver and installer.
+Persistent in-process execution engine for [uv](https://github.com/astral-sh/uv)'s package resolver and installer.
 
 While `uv` is designed as a world-class CLI tool, `uv-ffi` re-architects its core as a **resident engine**. By keeping a Tokio runtime, HTTP connection pools, site-packages metadata, and interpreter state warm in memory across calls, it achieves execution speeds limited only by filesystem I/O.
 
-Used internally by[omnipkg](https://github.com/1minds3t/omnipkg), but directly callable from any long-lived Python process.
+Used internally by [omnipkg](https://github.com/1minds3t/omnipkg), but directly callable from any long-lived Python process.
 
 ---
 
