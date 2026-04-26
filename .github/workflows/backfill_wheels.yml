@@ -158,7 +158,14 @@ jobs:
                   rid = rel["id"]
                   tag = rel["tag_name"]
                   releases_map[tag] = rid
-                  assets = gh(f"releases/{rid}/assets?per_page=100") or []
+                  assets = []
+                  assets_pg = 1
+                  while True:
+                      batch = gh(f"releases/{rid}/assets?per_page=100&page={assets_pg}") or []
+                      assets.extend(batch)
+                      if len(batch) < 100:
+                          break
+                      assets_pg += 1
                   names  = set()
                   for a in assets:
                       if a["name"].endswith(".whl"):
@@ -415,10 +422,16 @@ jobs:
               if not rels:
                   break
               for rel in rels:
-                  assets_url = f"https://api.github.com/repos/{repo}/releases/{rel['id']}/assets?per_page=100"
-                  for a in gh(assets_url) or []:
-                      if a["name"].endswith(".whl"):
-                          gh_wheels.append((rel["tag_name"], a["name"], a["browser_download_url"]))
+                  assets_pg2 = 1
+                  while True:
+                      assets_url = f"https://api.github.com/repos/{repo}/releases/{rel['id']}/assets?per_page=100&page={assets_pg2}"
+                      batch = gh(assets_url) or []
+                      for a in batch:
+                          if a["name"].endswith(".whl"):
+                              gh_wheels.append((rel["tag_name"], a["name"], a["browser_download_url"]))
+                      if len(batch) < 100:
+                          break
+                      assets_pg2 += 1
               page += 1
 
           pip_wheels = pypi_wheels("uv-ffi")
