@@ -20,7 +20,9 @@ Covers Linux x86_64/aarch64, macOS arm64/x86_64/universal2, Windows amd64/arm64 
 ```bash
 pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/
 ```
-400+ wheels hosted on GitHub Releases, indexed at the URL above. These were removed from PyPI to stay under the 10 GB storage limit.
+**[Browse all wheels](https://1minds3t.github.io/uv-ffi/)** — PyPI wheels + 600+ additional wheels hosted on GitHub Releases
+
+600+ wheels hosted on GitHub Releases, indexed at the URL above. These were removed from PyPI to stay under the 10 GB storage limit.
 
 ### Build from source (requires Rust toolchain)
 ```bash
