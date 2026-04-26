@@ -374,10 +374,11 @@ use_self = "warn"
 large_stack_arrays = "allow"
 
 [profile.release]
-strip = true
-lto = "thin"          # Changed from "fat". "thin" uses a fraction of the RAM but keeps most optimizations.
-codegen-units = 1     # Added. Forces sequential code generation, massively dropping RAM usage.
-panic = "abort"       # Added. Removes panic-unwinding code, which shrinks the final .so file size significantly.
+opt-level = "s"       # Optimizes for size, drastically reducing compiler memory
+lto = false           # CRITICAL: Disables LTO entirely to survive 32-bit PiWheels address space limits
+codegen-units = 16    # CRITICAL: Breaks code into small chunks so no single thread blows up the RAM
+panic = "abort"       # Shrinks the binary
+strip = true          # Removes debug symbols, keeps the wheel under 15MB
 
 # This profile is meant to mimic the `release` profile as closely as
 # possible, but using settings that are more beneficial for iterative
