@@ -375,7 +375,9 @@ large_stack_arrays = "allow"
 
 [profile.release]
 strip = true
-lto = "fat"
+lto = "thin"          # Changed from "fat". "thin" uses a fraction of the RAM but keeps most optimizations.
+codegen-units = 1     # Added. Forces sequential code generation, massively dropping RAM usage.
+panic = "abort"       # Added. Removes panic-unwinding code, which shrinks the final .so file size significantly.
 
 # This profile is meant to mimic the `release` profile as closely as
 # possible, but using settings that are more beneficial for iterative

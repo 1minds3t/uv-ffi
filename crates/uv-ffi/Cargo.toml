@@ -48,8 +48,9 @@ uv-platform-tags = { path = "../uv-platform-tags" }
 
 
 [profile.release]
-opt-level = 2
-lto = false
-codegen-units = 8
-debug = 0
-panic = "abort"
+opt-level = "s"       # "s" optimizes for size (uses less memory during compile than 2 or 3)
+lto = false           # CRITICAL: Stops LLVM from trying to load the whole project into 32-bit RAM at the end
+codegen-units = 16    # CRITICAL: Breaks the code into 16 tiny chunks so no single thread exceeds 32-bit limits
+debug = 0             # Removes debug symbols (saves RAM)
+panic = "abort"       # Removes crash-unwinding code (saves RAM and binary size)
+strip = true          # Strips the final binary (keeps the final wheel under 15MB)
