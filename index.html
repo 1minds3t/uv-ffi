@@ -630,11 +630,11 @@
         <div class="install-label">exotic platforms (musl · armv7 · riscv64 · s390x · PyPy · GraalPy · 3.13t)</div>
         <div class="install-block" style="margin-top:6px">
           <span class="prompt">$</span>
-          <span class="cmd">pip install <span class="pkg">uv-ffi</span> --extra-index-url <span style="color:var(--blue)">https://1minds3t.github.io/uv-ffi/</span></span>
+          <span class="cmd">pip install <span class="pkg">uv-ffi</span> --extra-index-url <span style="color:var(--blue)">https://exotic-wheels.github.io/</span></span>
           <button class="copy-btn" id="copyBtn2" onclick="copyExotic()">copy</button>
         </div>
         <div style="margin-top:8px">
-          <a href="https://1minds3t.github.io/uv-ffi/">Browse all 600+ wheels →</a>
+          <a href="https://exotic-wheels.github.io/">Browse all 600+ wheels →</a>
           &nbsp;·&nbsp;
           <a href="https://github.com/1minds3t/uv-ffi/blob/main/crates/uv-ffi/README.md">Full README</a>
           &nbsp;·&nbsp;
@@ -972,7 +972,7 @@
           <span class="link-sub">pypi.org/project/uv-ffi</span>
         </div>
       </a>
-      <a class="ext-link" href="https://1minds3t.github.io/uv-ffi/" target="_blank" rel="noopener">
+      <a class="ext-link" href="https://exotic-wheels.github.io/" target="_blank" rel="noopener">
         <span class="icon">🛞</span>
         <div>
           <span class="link-name">Wheel Index</span>
@@ -1009,7 +1009,7 @@
     <span>
       <a href="https://github.com/1minds3t">github</a> ·
       <a href="https://pypi.org/project/uv-ffi/">pypi</a> ·
-      <a href="https://1minds3t.github.io/uv-ffi/">wheel index</a>
+      <a href="https://exotic-wheels.github.io/">wheel index</a>
     </span>
     <span style="color:var(--muted2)">not affiliated with Astral Software Inc.</span>
   </footer>
@@ -1047,7 +1047,7 @@
     setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 1800);
   }
   function copyExotic() {
-    navigator.clipboard.writeText('pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/');
+    navigator.clipboard.writeText('pip install uv-ffi --extra-index-url https://exotic-wheels.github.io/');
     const btn = document.getElementById('copyBtn2');
     btn.textContent = 'copied!'; btn.classList.add('copied');
     setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 1800);
