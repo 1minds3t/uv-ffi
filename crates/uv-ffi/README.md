@@ -19,9 +19,9 @@ macOS users wanting native-only wheels (smaller download, no Rosetta overhead) c
 
 ### Exotic platforms (musl Alpine, armv7, riscv64, s390x, ppc64le, free-threaded CPython 3.13t, PyPy, GraalPy, Windows x86)
 ```bash
-pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/
+pip install uv-ffi --extra-index-url https://exotic-wheels.github.io/
 ```
-**[Browse all wheels](https://1minds3t.github.io/uv-ffi/)** — PyPI wheels + 600+ additional wheels hosted on GitHub Releases
+**[Browse all wheels](https://exotic-wheels.github.io/)** — PyPI wheels + 600+ additional wheels hosted on GitHub Releases
 
 600+ wheels hosted on GitHub Releases, indexed at the URL above. These were removed from PyPI to stay under the 10 GB storage limit.
 

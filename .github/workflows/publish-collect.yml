@@ -309,7 +309,7 @@ jobs:
                   <h1>uv-ffi wheel index</h1>
                   <p>Mainstream wheels: <a href="https://pypi.org/project/uv-ffi/">PyPI</a></p>
                   <p>Exotic platform wheels hosted here. Install any platform:</p>
-                  <pre>pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/</pre>
+                  <pre>pip install uv-ffi --extra-index-url https://exotic-wheels.github.io/</pre>
                   <p><a href="uv-ffi/">Browse all {len(all_wheels)} wheels →</a></p>
                 </body>
               </html>

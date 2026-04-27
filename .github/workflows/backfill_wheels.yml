@@ -453,7 +453,7 @@ jobs:
                        f"  <body>\n    <h1>uv-ffi wheel index</h1>\n"
                        f'    <p>Mainstream wheels: <a href="https://pypi.org/project/uv-ffi/">PyPI</a></p>\n'
                        f"    <p>Exotic/extended platform wheels hosted here.</p>\n"
-                       f"    <pre>pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/</pre>\n"
+                       f"    <pre>pip install uv-ffi --extra-index-url https://exotic-wheels.github.io/</pre>\n"
                        f'    <p><a href="uv-ffi/">Browse all {len(all_wheels)} wheels</a></p>\n'
                        f"  </body>\n</html>\n")
 

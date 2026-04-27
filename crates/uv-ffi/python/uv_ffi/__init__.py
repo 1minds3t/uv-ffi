@@ -15,7 +15,7 @@ except ImportError as _e:
     raise ImportError(
         f"\n\nuv-ffi native extension failed to load ({_plat} {_arch}).\n"
         "A pre-built wheel for your platform may be available at the extended index:\n\n"
-        "  pip install uv-ffi --extra-index-url https://1minds3t.github.io/uv-ffi/\n\n"
+        "  pip install uv-ffi --extra-index-url https://exotic-wheels.github.io/\n\n"
         "If no wheel exists for your platform, build from source (requires Rust):\n"
         "  pip install uv-ffi --no-binary uv-ffi\n"
     ) from _e

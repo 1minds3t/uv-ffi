@@ -38,7 +38,7 @@ Homepage = "https://github.com/1minds3t/uv-ffi"
 "Source Code" = "https://github.com/1minds3t/uv-ffi"
 "Bug Tracker" = "https://github.com/1minds3t/uv-ffi/issues"
 Omnipkg = "https://pypi.org/project/omnipkg/"
-"Extended Wheels" = "https://1minds3t.github.io/uv-ffi/"
+"Extended Wheels" = "https://exotic-wheels.github.io/"
 
 [tool.maturin]
 module-name = "uv_ffi.uv_ffi"
