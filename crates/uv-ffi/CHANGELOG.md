@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8.post13] — 2026-05-09
+
+abi3 feature flag + cp37 support + piwheels memory fix
+
+This release brings official support for Python 3.7 (End-Of-Life) without impacting modern Python environments, introduces a new dedicated domain for extended/exotic wheels, and ships critical memory optimizations to prevent Out-Of-Memory (OOM) errors on constrained 32-bit build systems like PiWheels.
+
+* **Elegant Python 3.7 Backwards Compatibility:**
+  * Converted PyO3 `abi3-py38` from a hard requirement to a default-enabled Cargo feature.
+  * Python >= 3.8 continues to use the highly compatible `abi3` single-wheel target.
+  * Python 3.7 drops the `abi3` feature during source builds (`--no-default-features`), gracefully falling back to a version-specific (`cp37-cp37m`) extension.
+  * Lowered `requires-python` in `pyproject.toml` to `>=3.7` and added the appropriate PyPI classifiers.
+* **Proactive Source Build Fallback Guides:** Updated the `build.rs` script to output a highly visible ASCII-art warning when a source build fails, immediately directing users to the pre-built `exotic-wheels` index.
+* **New Dedicated Exotic Wheel Index:** Migrated extended wheel hosting from the personal GitHub Pages URL to a new dedicated domain: `https://exotic-wheels.github.io/`.
+
+* **Resolved 32-bit ARM OOM Crashes:** Fixed a critical issue where compiling on Raspberry Pi build nodes would crash LLVM due to memory exhaustion.
+* **Workspace Profile Inheritance:** Moved the `[profile.release]` block out of `crates/uv-ffi/Cargo.toml` and into the root workspace `Cargo.toml` so Maturin correctly applies it.
+* **Aggressive Size/Memory Tuning:** Changed optimization levels from `s` to `z` (most aggressive size/memory optimization) and fine-tuned `codegen-units` to heavily restrict peak RAM usage per thread.
+
+* **Automated Wheel Indexing (`build_index.py`):** Added a new Python script that dynamically fetches release assets from PyPI and GitHub Releases, seamlessly generating a static HTML index for `pip` to parse via `--extra-index-url` or `-f`.
+* **Extended `cp37` CI Matrices:** Added dedicated `manylinux_2_17` jobs to automatically build CPython 3.7 wheels across `x86_64`, `aarch64`, `i686`, `armv7`, and `ppc64le`.
+* **Toolchain Pinning:** Pinned the Rust toolchain to `1.77.0` in the extended build workflows to ensure maximum compatibility with older legacy targets.
+* **Workflow Tag Matching:** Improved GitHub Actions tag matching logic to gracefully handle blank-tag manual workflow dispatches.
+
+---
+
+**📝 Code Changes:**
+- UPDATE: crates/uv-ffi/build.rs (15 lines changed)
+
+**⚙️ Configuration:**
+- Cargo.toml (4 lines)
+- crates/uv-ffi/Cargo.toml (13 lines)
+- crates/uv-ffi/pyproject.toml (5 lines)
+
+**Updates:**
+- Update tag matching logic in publish workflow
+
+_13 files changed, 171 insertions(+), 28 deletions(-)_
+
 ## [0.10.8.post12] — 2026-04-26
 
 The "PiWheels Survival & Global Index" Release
