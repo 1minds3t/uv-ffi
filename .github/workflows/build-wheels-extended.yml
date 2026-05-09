@@ -116,6 +116,30 @@ jobs:
         with:
           platforms: all
 
+      build-cp37-linux:
+    name: "CPython 3.7 • ${{ matrix.target }}"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        target: 
+          - x86_64
+          - i686
+          - aarch64
+          - armv7
+          - ppc64le
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Set up QEMU
+        if: matrix.target != 'x86_64' && matrix.target != 'i686'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+
       - name: Build cp37 wheel (manylinux_2_17)
         uses: PyO3/maturin-action@v1
         with:
@@ -123,6 +147,10 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: "2_17"
           args: --release --out ${{ github.workspace }}/wheels/ --interpreter python3.7 --no-default-features
+        # 👇👇👇 COPY THE ENV BLOCK HERE 👇👇👇
+        env:
+          CFLAGS_aarch64_unknown_linux_gnu: "-march=armv8-a -D__ARM_ARCH=8"
+          CFLAGS_armv7_unknown_linux_gnueabihf: "-march=armv7-a"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
