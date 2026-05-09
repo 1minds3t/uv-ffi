@@ -174,11 +174,23 @@ jobs:
           done
           echo "PyPI: $(ls dist-pypi/ | wc -l)  GH: $(ls dist-ghrelease/ | wc -l)"
 
+      - name: Resolve tag
+        id: tag
+        run: |
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}" \
+              --jq '.inputs.tag // ""' 2>/dev/null)
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Upload exotic wheels to GitHub Release
         if: hashFiles('dist-ghrelease/*.whl') != ''
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.workflow_run.head_branch }}
+          tag_name: ${{ steps.tag.outputs.tag }}
           files: dist-ghrelease/*.whl
           fail_on_unmatched_files: false
         env:
