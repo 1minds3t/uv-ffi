@@ -38,6 +38,30 @@ jobs:
         with:
           name: "exotic-wheels-pypy-${{ matrix.os }}-${{ matrix.pypy }}"
           path: wheels/
+          
+  build-cp37:
+    name: "CPython 3.7 • ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]  # Linux only — 3.7 runners gone from macOS/Windows
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Build cp37 wheel via manylinux container
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/uv-ffi
+          manylinux: "2_17"
+          args: --release --out ${{ github.workspace }}/wheels/ --interpreter python3.7
+      - name: Upload Wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: "exotic-wheels-cp37-${{ matrix.os }}"
+          path: wheels/
 
   build-graalpy:
     name: "GraalPy • ${{ matrix.os }}"
