@@ -374,9 +374,9 @@ use_self = "warn"
 large_stack_arrays = "allow"
 
 [profile.release]
-opt-level = "s"       # Optimizes for size, drastically reducing compiler memory
+opt-level = "z"       # CHANGED: "z" is more aggressive than "s" for size and memory reduction
 lto = false           # CRITICAL: Disables LTO entirely to survive 32-bit PiWheels address space limits
-codegen-units = 16    # CRITICAL: Breaks code into small chunks so no single thread blows up the RAM
+codegen-units = 16    # MORE units = smaller chunks = less peak RAM per thread
 panic = "abort"       # Shrinks the binary
 strip = true          # Removes debug symbols, keeps the wheel under 15MB
 
