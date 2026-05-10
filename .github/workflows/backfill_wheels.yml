@@ -440,7 +440,7 @@ jobs:
           all_wheels = sorted(seen.values(), key=lambda x: (x[0], x[1]))
 
           links = "\n".join(
-              f'  <a href="{url}" data-requires-python=">=3.8">{name}</a><br>'
+              f'  <a href="{url}" data-requires-python="{">=3.7" if "-cp37-" in name else ">=3.8"}">{name}</a><br>'
               for _, name, url in all_wheels
           )
 
