@@ -31,7 +31,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
-          args: --release --out ${{ github.workspace }}/wheels/ --interpreter ${{ matrix.pypy }}
+          args: --release --out ${{ github.workspace }}/wheels/ --interpreter ${{ matrix.pypy }} --features pyo3/generate-import-lib
 
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
@@ -93,35 +93,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: "exotic-wheels-freethreaded-${{ matrix.os }}"
-          path: wheels/
-
-  build-wasm:
-    name: "WebAssembly (Pyodide)"
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-
-      - name: Setup Emscripten
-        uses: mymindstorm/setup-emsdk@v14
-        with:
-          version: 3.1.58
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Build WebAssembly Wheel
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: crates/uv-ffi
-          target: wasm32-unknown-emscripten
-          args: --release --out ${{ github.workspace }}/wheels/ -i 3.12
-
-      - name: Upload Wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: "exotic-wheels-wasm"
           path: wheels/
