@@ -9,7 +9,7 @@
 pip install uv-ffi
 
 # Exotic platforms — musl Alpine, armv7, riscv64, s390x, free-threaded, PyPy, GraalPy, cp37
-pip install uv-ffi --extra-index-url https://exotic-wheels.github.io/
+pip install uv-ffi --extra-index-url https://exotic-wheels.github.io
 ```
 **[Browse all wheels](https://exotic-wheels.github.io/)** — PyPI wheels + 600+ additional wheels hosted on GitHub Releases
 
