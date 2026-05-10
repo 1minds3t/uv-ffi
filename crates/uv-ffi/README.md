@@ -30,6 +30,12 @@ pip install uv-ffi --extra-index-url https://exotic-wheels.github.io/
 pip install uv-ffi --no-binary uv-ffi
 
 ```
+### Build from source for cp37
+```bash
+pip install uv-ffi --config-settings \"cargo-extra-args=--no-default-features\"
+```
+
+
 If the Rust build fails, pre-built wheels for your platform are almost certainly available via the extra-index-url above.
 
 ---
