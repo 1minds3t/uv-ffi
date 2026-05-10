@@ -3,12 +3,20 @@ name: "🗄️ Backfill Wheels to GH Releases & PyPI"
 on:
   workflow_dispatch:
     inputs:
+      from_tag:
+        description: 'Start tag (inclusive) — only scan runs created after this release (e.g. v0.10.8.post11)'
+        required: true
+        default: ''
+      to_tag:
+        description: 'End tag (inclusive) — only scan runs created before this release (e.g. v0.10.8.post13). Leave blank to use latest release.'
+        required: false
+        default: ''
       dry_run:
         description: 'Dry run — show what would be uploaded without uploading'
         type: boolean
         default: true
       max_pages:
-        description: 'Max pages of artifact runs to scan (20 runs/page) — only runs newer than latest release asset'
+        description: 'Max pages of artifact runs to scan per workflow (20 runs/page)'
         default: '5'
 
 permissions:
@@ -27,6 +35,8 @@ jobs:
           REPO: ${{ github.repository }}
           DRY_RUN: ${{ inputs.dry_run }}
           MAX_PAGES: ${{ inputs.max_pages }}
+          FROM_TAG: ${{ inputs.from_tag }}
+          TO_TAG: ${{ inputs.to_tag }}
         run: |
           python3 - <<'PYEOF'
           import os, json, re, time, tempfile, zipfile
@@ -37,6 +47,8 @@ jobs:
           token     = os.environ["GH_TOKEN"]
           dry_run   = os.environ["DRY_RUN"] == "true"
           max_pages = int(os.environ["MAX_PAGES"])
+          from_tag  = os.environ.get("FROM_TAG", "").strip()
+          to_tag    = os.environ.get("TO_TAG", "").strip()
 
           WORKFLOWS = [
               "build-wheels.yml",
@@ -139,6 +151,23 @@ jobs:
                   print(f"    download failed: {e}")
                   return False
 
+          # ── Resolve from/to timestamps from release dates ────────────────
+          def get_release_ts(tag):
+              data = gh(f"releases/tags/{tag}")
+              if not data:
+                  raise SystemExit(f"❌ Could not find release for tag {tag}")
+              return data["created_at"]
+
+          from_ts = get_release_ts(from_tag)
+          # to_tag blank → use now (include everything up to present)
+          if to_tag:
+              to_ts = get_release_ts(to_tag)
+          else:
+              import datetime
+              to_ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+          print(f"Scanning runs between: {from_ts} ({from_tag}) → {to_ts} ({to_tag or 'now'})")
+
           # ── Step 1: load all GH releases + their assets ──────────────────
           print("=" * 60)
           print("Step 1 — Loading GH releases and assets")
@@ -192,10 +221,18 @@ jobs:
               for wf in WORKFLOWS:
                   print(f"\n📋 {wf}")
                   for page in range(1, max_pages + 1):
-                      runs = gh(f"actions/workflows/{wf}/runs?per_page=20&page={page}&status=success")
+                      runs = gh(f"actions/workflows/{wf}/runs?per_page=20&page={page}&status=completed")
                       if not runs or not runs.get("workflow_runs"):
                           break
+                      stop = False
                       for run in runs["workflow_runs"]:
+                          run_ts = run["created_at"]
+                          if run_ts > to_ts:
+                              continue  # too new, skip
+                          if run_ts < from_ts:
+                              print(f"  run {run['id']} at {run_ts} < from_ts — stopping scan")
+                              stop = True
+                              break
                           run_id = run["id"]
                           arts = gh(f"actions/runs/{run_id}/artifacts?per_page=100")
                           if not arts:
@@ -236,30 +273,55 @@ jobs:
                                       print(f"    ⚠️  no release for {tag} — skip {wname}")
                                       continue
                                   existing = release_assets[rid]
-                                  if wname in existing:
+                                  if wname not in existing:
+                                      print(f"    ⬆️  {tag} ← {wname}")
+                                      if gh_upload(rid, str(whl)):
+                                          print(f"    ✅ {wname}")
+                                          existing[wname] = ""
+                                          uploaded_names.add(wname)
+                                          art_uploaded += 1
+                                      else:
+                                          art_failed += 1
+                                      time.sleep(0.3)
+                                  else:
                                       art_skipped += 1
                                       uploaded_names.add(wname)
-                                      continue
-                                  print(f"    ⬆️  {tag} ← {wname}")
-                                  if gh_upload(rid, str(whl)):
-                                      print(f"    ✅ {wname}")
-                                      existing[wname] = ""
-                                      uploaded_names.add(wname)
-                                      art_uploaded += 1
-                                  else:
-                                      art_failed += 1
-                                  time.sleep(0.3)
+                                  # Also stage PyPI-eligible wheels directly
+                                  if pypi_eligible(wname):
+                                      pypi_existing = get_pypi_filenames_cached(m.group(1))
+                                      if wname not in pypi_existing:
+                                          dest = os.path.join("/tmp/pypi-dist", wname)
+                                          if not os.path.exists(dest):
+                                              import shutil as _shutil
+                                              _shutil.copy2(str(whl), dest)
+                                              strip_license_file(Path(dest))
+                                              print(f"    📦 staged for PyPI: {wname}")
 
                               # clear disk
                               import shutil
                               shutil.rmtree(art_dir, ignore_errors=True)
                               os.makedirs(art_dir, exist_ok=True)
 
+                      if stop:
+                          break
                       if len(runs["workflow_runs"]) < 20:
                           break
 
           if not dry_run:
               print(f"\nArtifact→Release: uploaded={art_uploaded} skipped={art_skipped} failed={art_failed}")
+
+          # ── Reload release assets after Step 2 uploads ──────────────────
+          print("\nReloading release assets after Step 2 uploads...")
+          for tag, rid in releases_map.items():
+              assets = []
+              assets_pg = 1
+              while True:
+                  batch = gh(f"releases/{rid}/assets?per_page=100&page={assets_pg}") or []
+                  assets.extend(batch)
+                  if len(batch) < 100:
+                      break
+                  assets_pg += 1
+              release_assets[rid] = {a["name"]: a["browser_download_url"] for a in assets if a["name"].endswith(".whl")}
 
           # ── Step 3: GH Release → PyPI gap fill ──────────────────────────
           # Purely filename comparison — no artifact downloads needed
