@@ -108,24 +108,33 @@ jobs:
           BRANCH="omnipkg-ffi-v0.10.8"
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
 
-          find_run() {
+          TAG_CREATED_AT=$(gh api "repos/${{ github.repository }}/releases/tags/$TAG" \
+            --jq '.created_at' 2>/dev/null || \
+            gh api "repos/${{ github.repository }}/git/refs/tags/$TAG" \
+            --jq '.object.url' 2>/dev/null | xargs gh api --jq '.tagger.date // .author.date' 2>/dev/null)
+          echo "Tag $TAG created at: $TAG_CREATED_AT"
+
+          # ── Fail fast if all 3 builds already ran after this tag ────
+          # publish.yml is the first-launch publisher — use backfill_wheels.yml to re-publish
+          check_already_ran() {
             local WF=$1
-            echo "  Scanning $WF for successful run with input tag=$TAG..." >&2
-            local IDS
-            IDS=$(gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
-              --jq ".workflow_runs[] | select(.conclusion == \"success\") | .id" 2>/dev/null)
-            for RUN_ID in $IDS; do
-              RUN_INPUT_TAG=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" \
-                --jq '.inputs.tag // ""' 2>/dev/null)
-              echo "  run $RUN_ID input.tag=$RUN_INPUT_TAG" >&2
-              # Match by tag if set, OR accept blank-tag runs (dispatched without explicit tag)
-              if [ "$RUN_INPUT_TAG" = "$TAG" ]; then
-                echo "$RUN_ID"
-                return
-              fi
-            done
+            gh api "repos/${{ github.repository }}/actions/workflows/$WF/runs?branch=$BRANCH&per_page=20" \
+              --jq ".workflow_runs[] | select(.conclusion == \"success\" and .created_at > \"$TAG_CREATED_AT\") | .id" \
+              2>/dev/null | head -1
           }
 
+          STD_EXISTING=$(check_already_ran "build-wheels.yml")
+          EXT_EXISTING=$(check_already_ran "build-wheels-extended.yml")
+          EXO_EXISTING=$(check_already_ran "build-wheels-exotic.yml")
+
+          if [ -n "$STD_EXISTING" ] && [ -n "$EXT_EXISTING" ] && [ -n "$EXO_EXISTING" ]; then
+            echo "❌ All 3 build workflows already have successful runs after tag $TAG was created."
+            echo "   This workflow is the first-launch publisher."
+            echo "   To publish missing wheels from existing runs, use backfill_wheels.yml instead."
+            exit 1
+          fi
+
+          # ── Always dispatch all three fresh ─────────────────────────
           dispatch_run() {
             local WF=$1
             local BEFORE
@@ -135,18 +144,6 @@ jobs:
               -f ref="$BRANCH" \
               -f inputs[tag]="$TAG"
             echo "$BEFORE" > "/tmp/before_${WF//\//_}"
-          }
-
-          find_or_dispatch() {
-            local WF=$1
-            local ID
-            ID=$(find_run "$WF")
-            if [ -n "$ID" ] && [ "$ID" != "null" ]; then
-              echo "  $WF → reusing existing run $ID" >&2
-              echo "$ID" > "/tmp/run_id_${WF//\//_}"
-            else
-              dispatch_run "$WF"
-            fi
           }
 
           wait_for_dispatched() {
@@ -177,9 +174,9 @@ jobs:
           }
 
           # Dispatch all three before waiting on any of them
-          find_or_dispatch "build-wheels.yml"
-          find_or_dispatch "build-wheels-extended.yml"
-          find_or_dispatch "build-wheels-exotic.yml"
+          dispatch_run "build-wheels.yml"
+          dispatch_run "build-wheels-extended.yml"
+          dispatch_run "build-wheels-exotic.yml"
           wait_for_dispatched "build-wheels.yml"
           wait_for_dispatched "build-wheels-extended.yml"
           wait_for_dispatched "build-wheels-exotic.yml"
