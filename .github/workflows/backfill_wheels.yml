@@ -14,6 +14,7 @@ on:
 permissions:
   contents: write
   actions: read
+  id-token: write
 
 jobs:
   backfill:
@@ -23,19 +24,17 @@ jobs:
       - name: Run backfill
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PYPI_API_TOKEN: ${{ secrets.OMNIPKG_DEPLOY_KEY }}
           REPO: ${{ github.repository }}
           DRY_RUN: ${{ inputs.dry_run }}
           MAX_PAGES: ${{ inputs.max_pages }}
         run: |
           python3 - <<'PYEOF'
-          import os, json, re, time, tempfile, zipfile, subprocess
+          import os, json, re, time, tempfile, zipfile
           import urllib.request, urllib.error, http.client, ssl
           from pathlib import Path
 
           repo      = os.environ["REPO"]
           token     = os.environ["GH_TOKEN"]
-          pypi_tok  = os.environ.get("PYPI_API_TOKEN", "")
           dry_run   = os.environ["DRY_RUN"] == "true"
           max_pages = int(os.environ["MAX_PAGES"])
 
@@ -291,87 +290,103 @@ jobs:
           def get_asset_download_url(release_id, filename):
               return release_assets.get(release_id, {}).get(filename)
 
-          if not dry_run and not pypi_tok:
-              print("No PYPI_API_TOKEN — skipping PyPI upload")
-          else:
-              if not dry_run:
-                  subprocess.run(["pip", "install", "twine", "--quiet"], check=True)
+          if dry_run:
+              print("Dry run — skipping PyPI stage")
 
-              # group release wheels by version, filter PyPI-eligible
-              pypi_todo = {}  # version -> [(rid, name)]
-              for tag, rid in releases_map.items():
-                  version = tag.lstrip("v")
-                  for name in release_assets[rid]:
-                      if pypi_eligible(name):
-                          pypi_todo.setdefault(version, []).append((rid, name))
+          # group release wheels by version, filter PyPI-eligible
+          pypi_todo = {}  # version -> [(rid, name)]
+          for tag, rid in releases_map.items():
+              version = tag.lstrip("v")
+              for name in release_assets[rid]:
+                  if pypi_eligible(name):
+                      pypi_todo.setdefault(version, []).append((rid, name))
 
-              pypi_uploaded = pypi_skipped = pypi_failed = 0
+          pypi_skipped = 0
+          os.makedirs("/tmp/pypi-dist", exist_ok=True)
 
-              for version in sorted(pypi_todo):
-                  wheels = pypi_todo[version]
-                  existing = get_pypi_filenames(version)
-                  to_upload = [(rid, n) for rid, n in wheels if n not in existing]
+          for version in sorted(pypi_todo):
+              wheels = pypi_todo[version]
+              existing = get_pypi_filenames(version)
+              to_upload = [(rid, n) for rid, n in wheels if n not in existing]
 
-                  if not to_upload:
-                      print(f"  {version}: all {len(wheels)} PyPI-eligible wheels already there")
-                      pypi_skipped += len(wheels)
+              if not to_upload:
+                  print(f"  {version}: all {len(wheels)} PyPI-eligible wheels already there")
+                  pypi_skipped += len(wheels)
+                  continue
+
+              print(f"  {version}: {len(to_upload)} to stage ({len(wheels)-len(to_upload)} already on PyPI)")
+
+              if dry_run:
+                  for _, n in to_upload:
+                      print(f"    [DRY RUN] would upload {n}")
+                  continue
+
+              for rid, name in to_upload:
+                  url = get_asset_download_url(rid, name)
+                  if not url:
+                      print(f"    no download url for {name}")
                       continue
-
-                  print(f"  {version}: {len(to_upload)} to upload ({len(wheels)-len(to_upload)} already on PyPI)")
-
-                  if dry_run:
-                      for _, n in to_upload:
-                          print(f"    [DRY RUN] would upload {n}")
+                  dest = os.path.join("/tmp/pypi-dist", name)
+                  if os.path.exists(dest):
                       continue
+                  try:
+                      urllib.request.urlretrieve(url, dest)
+                      strip_license_file(Path(dest))
+                      print(f"    staged: {name}")
+                  except Exception as e:
+                      print(f"    download failed {name}: {e}")
 
-                  with tempfile.TemporaryDirectory() as td:
-                      for rid, name in to_upload:
-                          url = get_asset_download_url(rid, name)
-                          if not url:
-                              print(f"    no download url for {name}")
-                              pypi_failed += 1
-                              continue
-                          dest = os.path.join(td, name)
-                          try:
-                              urllib.request.urlretrieve(url, dest)
-                          except Exception as e:
-                              print(f"    download failed {name}: {e}")
-                              pypi_failed += 1
-                              continue
-
-                      whl_files = list(Path(td).glob("*.whl"))
-                      if not whl_files:
-                          continue
-
-                      for wf_ in whl_files:
-                          strip_license_file(wf_)
-
-                      for wf_ in whl_files:
-                          result = subprocess.run(
-                              ["twine", "upload", "--skip-existing", "--non-interactive", str(wf_)],
-                              env={**os.environ,
-                                   "TWINE_USERNAME": "__token__",
-                                   "TWINE_PASSWORD": pypi_tok},
-                              capture_output=True, text=True
-                          )
-                          if result.returncode == 0:
-                              print(f"    ✅ {wf_.name}")
-                              pypi_uploaded += 1
-                          else:
-                              print(f"    ❌ {wf_.name} (rc={result.returncode})")
-                              print(f"    STDOUT: {result.stdout[-500:]}")
-                              pypi_failed += 1
-
-              if not dry_run:
-                  print(f"\nPyPI: uploaded={pypi_uploaded} skipped={pypi_skipped} failed={pypi_failed}")
-              else:
-                  print("\n[DRY RUN] rerun with dry_run=false to actually upload")
+          staged = list(Path("/tmp/pypi-dist").glob("*.whl"))
+          print(f"\nStaged {len(staged)} wheels for PyPI upload")
+          for w in staged:
+              print(f"  {w.name}")
 
           PYEOF
 
+      - name: Upload staged wheels for OIDC publish
+        if: inputs.dry_run == false
+        uses: actions/upload-artifact@v4
+        with:
+          name: backfill-pypi-dist
+          path: /tmp/pypi-dist/
+          if-no-files-found: ignore
+
+  pypi-publish:
+    name: "🚀 Publish backfilled wheels via OIDC"
+    needs: backfill
+    if: inputs.dry_run == false
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/uv-ffi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download staged wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: backfill-pypi-dist
+          path: dist/
+
+      - name: Check for wheels to upload
+        id: check
+        run: |
+          COUNT=$(find dist/ -name "*.whl" | wc -l)
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          echo "Found $COUNT wheels to upload"
+          ls dist/ || true
+
+      - name: Publish via OIDC (trusted publisher)
+        if: steps.check.outputs.count > 0
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true
+
+
   update-wheel-index:
     name: "📄 Update GH Pages wheel index"
-    needs: backfill
+    needs: [backfill, pypi-publish]
     runs-on: ubuntu-latest
     if: inputs.dry_run == false
     permissions:
@@ -440,7 +455,7 @@ jobs:
           all_wheels = sorted(seen.values(), key=lambda x: (x[0], x[1]))
 
           links = "\n".join(
-              f'  <a href="{url}" data-requires-python="{">=3.7" if "-cp37-" in name else ">=3.8"}">{name}</a><br>'
+              f'  <a href="{url}" data-requires-python=">=3.8">{name}</a><br>'
               for _, name, url in all_wheels
           )
 
