@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8.post14] — 2026-05-10
+
+improve exotic-wheels installation reliability and index compatibility
+
+## Installation Improvements
+
+Updated installation guidance for exotic-wheels hosted packages.
+
+Previous documentation recommended using:
+
+```bash
+pip install uv-ffi -f https://exotic-wheels.github.io/
+````
+
+While this can work in certain cached or direct-link scenarios, `--find-links` (`-f`) is not intended to behave as a scalable multi-package package index.
+
+The recommended installation method is:
+
+```bash
+pip install uv-ffi --extra-index-url https://exotic-wheels.github.io/
+```
+
+`--extra-index-url` properly integrates the exotic-wheels PEP 503 index with PyPI and allows pip to:
+
+* resolve packages through per-package index pages
+* fall back cleanly to PyPI
+* avoid flat-index scaling issues
+* work reliably across fresh environments and machines
+* avoid cache-dependent behavior seen with `--find-links`
+
+* `--find-links` remains supported for direct wheel pages and local wheelhouses
+* HTTPS is required for proper pip index integration
+* Documentation was updated to reflect the correct long-term installation workflow
+
+---
+
+**📝 Code Changes:**
+- UPDATE: crates/uv-ffi/build.rs (3 lines changed)
+
+**📚 Documentation:**
+- README.md (2 lines)
+- crates/uv-ffi/README.md (6 lines)
+
+**Updates:**
+- Update backfill_wheels.yml
+- Update Python version in build-wheels workflow
+- Update tag resolution for GitHub Release upload
+- Update rust-toolchain version to 1.77.0
+- Update Rust toolchain version to 1.91.0
+- Update build-wheels-extended.yml to include new argument
+
+_9 files changed, 207 insertions(+), 162 deletions(-)_
+
 ## [0.10.8.post13] — 2026-05-09
 
 abi3 feature flag + cp37 support + piwheels memory fix
