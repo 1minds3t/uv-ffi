@@ -163,7 +163,7 @@ jobs:
               fi
               ATTEMPTS=$((ATTEMPTS+1))
               echo "  waiting for $WF run to appear... attempt $ATTEMPTS" >&2
-              [ $ATTEMPTS -gt 60 ] && { echo "❌ Could not find dispatched run for $WF" >&2; exit 1; }
+              [ $ATTEMPTS -gt 120 ] && { echo "❌ Could not find dispatched run for $WF" >&2; exit 1; }
               sleep 10
             done
           }
@@ -179,6 +179,7 @@ jobs:
           dispatch_run "build-wheels-exotic.yml"
           wait_for_dispatched "build-wheels.yml"
           wait_for_dispatched "build-wheels-extended.yml"
+          sleep 30  # exotic workflow consistently lags the GH API
           wait_for_dispatched "build-wheels-exotic.yml"
 
           wait_for_run() {
