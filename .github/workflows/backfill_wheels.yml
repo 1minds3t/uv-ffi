@@ -146,7 +146,6 @@ jobs:
 
           releases_map    = {}   # tag -> release_id
           release_assets  = {}   # release_id -> set of filenames
-          latest_asset_ts = "2000-01-01T00:00:00Z"
 
           page = 1
           while True:
@@ -169,15 +168,12 @@ jobs:
                   for a in assets:
                       if a["name"].endswith(".whl"):
                           names[a["name"]] = a["browser_download_url"]
-                          if a["updated_at"] > latest_asset_ts:
-                              latest_asset_ts = a["updated_at"]
                   release_assets[rid] = names
               if len(rels) < 100:
                   break
               page += 1
 
           print(f"Found {len(releases_map)} releases")
-          print(f"Latest release asset timestamp: {latest_asset_ts}")
 
           total_release_wheels = sum(len(v) for v in release_assets.values())
           print(f"Total wheels already in releases: {total_release_wheels}")
@@ -186,7 +182,7 @@ jobs:
           # Only scan runs created AFTER the latest release asset timestamp
           print()
           print("=" * 60)
-          print(f"Step 2 — Artifact → GH Release backfill (runs after {latest_asset_ts})")
+          print(f"Step 2 — Artifact → GH Release backfill")
           print("=" * 60)
 
           art_uploaded = art_skipped = art_failed = 0
@@ -199,13 +195,7 @@ jobs:
                       runs = gh(f"actions/workflows/{wf}/runs?per_page=20&page={page}&status=success")
                       if not runs or not runs.get("workflow_runs"):
                           break
-                      stop = False
                       for run in runs["workflow_runs"]:
-                          run_ts = run["created_at"]
-                          if run_ts <= latest_asset_ts:
-                              print(f"  run {run['id']} at {run_ts} ≤ latest asset — stopping scan")
-                              stop = True
-                              break
                           run_id = run["id"]
                           arts = gh(f"actions/runs/{run_id}/artifacts?per_page=100")
                           if not arts:
@@ -265,8 +255,6 @@ jobs:
                               shutil.rmtree(art_dir, ignore_errors=True)
                               os.makedirs(art_dir, exist_ok=True)
 
-                      if stop:
-                          break
                       if len(runs["workflow_runs"]) < 20:
                           break
 
@@ -290,11 +278,10 @@ jobs:
           def get_asset_download_url(release_id, filename):
               return release_assets.get(release_id, {}).get(filename)
 
-          if dry_run:
-              print("Dry run — skipping PyPI stage")
+          if not dry_run:
+              print("No PYPI_API_TOKEN — wheels will be uploaded via OIDC in next job")
 
-          # group release wheels by version, filter PyPI-eligible
-          pypi_todo = {}  # version -> [(rid, name)]
+          pypi_todo = {}
           for tag, rid in releases_map.items():
               version = tag.lstrip("v")
               for name in release_assets[rid]:
@@ -337,7 +324,7 @@ jobs:
                       print(f"    download failed {name}: {e}")
 
           staged = list(Path("/tmp/pypi-dist").glob("*.whl"))
-          print(f"\nStaged {len(staged)} wheels for PyPI upload")
+          print(f"\nStaged {len(staged)} wheels for PyPI OIDC upload")
           for w in staged:
               print(f"  {w.name}")
 
@@ -382,7 +369,6 @@ jobs:
         with:
           packages-dir: dist/
           skip-existing: true
-
 
   update-wheel-index:
     name: "📄 Update GH Pages wheel index"
