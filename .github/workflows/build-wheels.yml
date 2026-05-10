@@ -147,10 +147,7 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-          echo PATH=%PATH% >> %GITHUB_ENV%
-          echo INCLUDE=%INCLUDE% >> %GITHUB_ENV%
-          echo LIB=%LIB% >> %GITHUB_ENV%
-          echo LIBPATH=%LIBPATH% >> %GITHUB_ENV%
+          set >> %GITHUB_ENV%
 
       - name: Check PyPI for existing wheel
         id: pypi_check
@@ -177,7 +174,7 @@ jobs:
           $env:RUSTUP_HOME = "C:\rustup-home"
           $env:CARGO_HOME = "C:\cargo-home"
           $env:PATH = "C:\cargo-home\bin;" + $env:PATH
-          C:\Python313\python.exe -m maturin build --release --out "${{ github.workspace }}\wheels" --manifest-path crates/uv-ffi/Cargo.toml
+          C:\Python312\python.exe -m maturin build --release --out "${{ github.workspace }}\wheels" --manifest-path crates/uv-ffi/Cargo.toml
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
 
