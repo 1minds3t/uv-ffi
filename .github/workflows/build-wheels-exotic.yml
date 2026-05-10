@@ -31,7 +31,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/uv-ffi
-          args: --release --out ${{ github.workspace }}/wheels/ --interpreter ${{ matrix.pypy }} --features pyo3/generate-import-lib
+          args: --release --out ${{ github.workspace }}/wheels/ -i python
 
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
