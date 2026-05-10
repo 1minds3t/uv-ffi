@@ -119,7 +119,7 @@ jobs:
                 --jq '.inputs.tag // ""' 2>/dev/null)
               echo "  run $RUN_ID input.tag=$RUN_INPUT_TAG" >&2
               # Match by tag if set, OR accept blank-tag runs (dispatched without explicit tag)
-              if [ "$RUN_INPUT_TAG" = "$TAG" ] || [ -z "$RUN_INPUT_TAG" ]; then
+              if [ "$RUN_INPUT_TAG" = "$TAG" ]; then
                 echo "$RUN_ID"
                 return
               fi
