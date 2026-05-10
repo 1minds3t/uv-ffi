@@ -286,16 +286,6 @@ jobs:
                                   else:
                                       art_skipped += 1
                                       uploaded_names.add(wname)
-                                  # Also stage PyPI-eligible wheels directly
-                                  if pypi_eligible(wname):
-                                      pypi_existing = get_pypi_filenames_cached(m.group(1))
-                                      if wname not in pypi_existing:
-                                          dest = os.path.join("/tmp/pypi-dist", wname)
-                                          if not os.path.exists(dest):
-                                              import shutil as _shutil
-                                              _shutil.copy2(str(whl), dest)
-                                              strip_license_file(Path(dest))
-                                              print(f"    📦 staged for PyPI: {wname}")
 
                               # clear disk
                               import shutil
