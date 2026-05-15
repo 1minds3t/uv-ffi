@@ -65,6 +65,8 @@ jobs:
           ]
 
           def pypi_eligible(name):
+              if name.endswith(".tar.gz"):
+                  return True  # sdists always eligible
               if re.search(r"-pp\d|-graalpy|-cp313t-", name):
                   return False
               if re.search(r"macosx_10_12_x86_64\.whl$", name):
@@ -195,7 +197,7 @@ jobs:
                       assets_pg += 1
                   names  = {}
                   for a in assets:
-                      if a["name"].endswith(".whl"):
+                      if a["name"].endswith((".whl", ".tar.gz")):
                           names[a["name"]] = a["browser_download_url"]
                   release_assets[rid] = names
               if len(rels) < 100:
@@ -243,7 +245,9 @@ jobs:
                               aname = art["name"]
                               if not (aname.startswith("wheels-") or
                                       aname.startswith("ext-wheels-") or
-                                      aname.startswith("exotic-wheels-")):
+                                      aname.startswith("exotic-wheels-") or
+                                      aname.startswith("sdist-") or
+                                      aname == "source-dist"):
                                   continue
                               art_id  = art["id"]
                               art_dir = os.path.join(tmpdir, str(art_id))
@@ -258,10 +262,12 @@ jobs:
                                   art_failed += 1
                                   continue
 
-                              wheels = list(Path(art_dir).rglob("*.whl"))
+                              wheels = list(Path(art_dir).rglob("*.whl")) + list(Path(art_dir).rglob("*.tar.gz"))
                               for whl in wheels:
                                   wname = whl.name
-                                  m = re.match(r"uv_ffi-([^-]+)-", wname)
+                                  # wheels:  uv_ffi-0.10.8.post14-cp39-cp39-linux_x86_64.whl
+                                  # sdists:  uv_ffi-0.10.8.post14.tar.gz
+                                  m = re.match(r"uv.ffi-([^-]+?)(?:\.tar\.gz|-)", wname)
                                   if not m:
                                       continue
                                   tag = f"v{m.group(1)}"
@@ -311,7 +317,7 @@ jobs:
                   if len(batch) < 100:
                       break
                   assets_pg += 1
-              release_assets[rid] = {a["name"]: a["browser_download_url"] for a in assets if a["name"].endswith(".whl")}
+              release_assets[rid] = {a["name"]: a["browser_download_url"] for a in assets if a["name"].endswith((".whl", ".tar.gz"))}
 
           # ── Step 3: GH Release → PyPI gap fill ──────────────────────────
           # Purely filename comparison — no artifact downloads needed
@@ -370,13 +376,14 @@ jobs:
                       continue
                   try:
                       urllib.request.urlretrieve(url, dest)
-                      strip_license_file(Path(dest))
+                      if name.endswith(".whl"):
+                          strip_license_file(Path(dest))
                       print(f"    staged: {name}")
                   except Exception as e:
                       print(f"    download failed {name}: {e}")
 
-          staged = list(Path("/tmp/pypi-dist").glob("*.whl"))
-          print(f"\nStaged {len(staged)} wheels for PyPI OIDC upload")
+          staged = list(Path("/tmp/pypi-dist").glob("*.whl")) + list(Path("/tmp/pypi-dist").glob("*.tar.gz"))
+          print(f"\nStaged {len(staged)} files for PyPI OIDC upload")
           for w in staged:
               print(f"  {w.name}")
 
@@ -407,12 +414,12 @@ jobs:
           name: backfill-pypi-dist
           path: dist/
 
-      - name: Check for wheels to upload
+      - name: Check for files to upload
         id: check
         run: |
-          COUNT=$(find dist/ -name "*.whl" | wc -l)
+          COUNT=$(find dist/ -type f | wc -l)
           echo "count=$COUNT" >> $GITHUB_OUTPUT
-          echo "Found $COUNT wheels to upload"
+          echo "Found $COUNT files to upload"
           ls dist/ || true
 
       - name: Publish via OIDC (trusted publisher)
@@ -475,7 +482,7 @@ jobs:
                       assets_url = f"https://api.github.com/repos/{repo}/releases/{rel['id']}/assets?per_page=100&page={assets_pg2}"
                       batch = gh(assets_url) or []
                       for a in batch:
-                          if a["name"].endswith(".whl"):
+                          if a["name"].endswith((".whl", ".tar.gz")):
                               gh_wheels.append((rel["tag_name"], a["name"], a["browser_download_url"]))
                       if len(batch) < 100:
                           break
