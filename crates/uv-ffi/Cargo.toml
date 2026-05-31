@@ -31,6 +31,7 @@ uv-resolver = { path = "../uv-resolver" }
 uv-workspace = { path = "../uv-workspace" }
 uv-python = { path = "../uv-python" }
 uv-normalize = { path = "../uv-normalize" }
+uv-installer = { path = "../uv-installer" }
 uv-distribution-types = { path = "../uv-distribution-types" }
 uv-pep440 = { path = "../uv-pep440" }
 uv-settings = { path = "../uv-settings" }

@@ -6588,6 +6588,7 @@ dependencies = [
  "uv-distribution-types",
  "uv-fs",
  "uv-install-wheel",
+ "uv-installer",
  "uv-normalize",
  "uv-pep440",
  "uv-pep508",

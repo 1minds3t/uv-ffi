@@ -185,25 +185,51 @@ pub async fn pip_install(
 
     // Detect the current Python interpreter.
     let environment = if target.is_some() || prefix.is_some() {
-        let python_request = python.as_deref().map(PythonRequest::parse);
-        let reporter = PythonDownloadReporter::single(printer);
-
-        let installation = PythonInstallation::find_or_download(
-            python_request.as_ref(),
-            EnvironmentPreference::from_system_flag(system, false),
-            python_preference.with_system_flag(system),
-            python_downloads,
-            &client_builder,
-            &cache,
-            Some(&reporter),
-            install_mirrors.python_install_mirror.as_deref(),
-            install_mirrors.pypy_install_mirror.as_deref(),
-            install_mirrors.python_downloads_json_url.as_deref(),
-            preview,
-        )
-        .await?;
-        report_interpreter(&installation, true, printer)?;
-        PythonEnvironment::from_installation(installation)
+        // For BUBBLE_INSTALL, the FFI layer pre-warms PYTHON_ENVIRONMENT with the bubble env.
+        // Reuse it to avoid ~35ms find_or_download on every bubble call.
+        if crate::BUBBLE_INSTALL.load(std::sync::atomic::Ordering::SeqCst) {
+            if let Some(env) = crate::PYTHON_ENVIRONMENT.lock().ok().and_then(|g| g.clone()) {
+                env
+            } else {
+                let python_request = python.as_deref().map(PythonRequest::parse);
+                let reporter = PythonDownloadReporter::single(printer);
+                let installation = PythonInstallation::find_or_download(
+                    python_request.as_ref(),
+                    EnvironmentPreference::from_system_flag(system, false),
+                    python_preference.with_system_flag(system),
+                    python_downloads,
+                    &client_builder,
+                    &cache,
+                    Some(&reporter),
+                    install_mirrors.python_install_mirror.as_deref(),
+                    install_mirrors.pypy_install_mirror.as_deref(),
+                    install_mirrors.python_downloads_json_url.as_deref(),
+                    preview,
+                )
+                .await?;
+                report_interpreter(&installation, true, printer)?;
+                PythonEnvironment::from_installation(installation)
+            }
+        } else {
+            let python_request = python.as_deref().map(PythonRequest::parse);
+            let reporter = PythonDownloadReporter::single(printer);
+            let installation = PythonInstallation::find_or_download(
+                python_request.as_ref(),
+                EnvironmentPreference::from_system_flag(system, false),
+                python_preference.with_system_flag(system),
+                python_downloads,
+                &client_builder,
+                &cache,
+                Some(&reporter),
+                install_mirrors.python_install_mirror.as_deref(),
+                install_mirrors.pypy_install_mirror.as_deref(),
+                install_mirrors.python_downloads_json_url.as_deref(),
+                preview,
+            )
+            .await?;
+            report_interpreter(&installation, true, printer)?;
+            PythonEnvironment::from_installation(installation)
+        }
     } else {
         // Reuse cached PythonEnvironment if available — avoids filesystem search every call.
         let environment = if let Some(env) = crate::PYTHON_ENVIRONMENT.lock().ok()
@@ -227,6 +253,7 @@ pub async fn pip_install(
         };
         environment
     };
+
 
     // Lower the extra build dependencies, if any.
     let extra_build_requires =
@@ -313,6 +340,7 @@ pub async fn pip_install(
     // Determine the set of installed packages.
     let _t_sp = std::time::Instant::now();
     let is_bubble = crate::BUBBLE_INSTALL.load(std::sync::atomic::Ordering::SeqCst);
+
     let site_packages = {
         let force = crate::FORCE_RESCAN.load(std::sync::atomic::Ordering::SeqCst);
         // Bubble installs NEVER read from or write to SITE_PACKAGES_CACHE.
@@ -321,20 +349,34 @@ pub async fn pip_install(
         // writing that back would poison the cache — causing the next main-env
         // install to think nothing is installed and short-circuit satisfies_spec.
         let cached = if !is_bubble && !force {
-            crate::SITE_PACKAGES_CACHE.lock().ok().and_then(|g| g.clone())
+            crate::SITE_PACKAGES_CACHE.lock().ok().and_then(|g| g.as_ref().map(|arc| (**arc).clone()))
+        } else if is_bubble {
+            // Check per-target bubble cache (managed dirs only — gated in lib.rs)
+            crate::BUBBLE_SITE_PACKAGES_CACHE.lock().ok()
+                .and_then(|g| g.as_ref().map(|arc| (**arc).clone()))
         } else {
             None
         };
         if let Some(sp) = cached {
-            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-site-packages-scan: {:.2}ms (cached)", _t_sp.elapsed().as_secs_f64()*1000.0); }
+            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) {
+                eprintln!("[UV-PROFILE] post-site-packages-scan: {:.2}ms (cached{})",
+                    _t_sp.elapsed().as_secs_f64()*1000.0,
+                    if is_bubble { "/bubble" } else { "" });
+            }
             sp
         } else {
             let sp = SitePackages::from_environment(&environment)?;
             if !is_bubble {
-                if let Ok(mut g) = crate::SITE_PACKAGES_CACHE.lock() { *g = Some(sp.clone()); }
+                if let Ok(mut g) = crate::SITE_PACKAGES_CACHE.lock() { *g = Some(std::sync::Arc::new(sp.clone())); }
                 crate::FORCE_RESCAN.store(false, std::sync::atomic::Ordering::SeqCst);
+            } else {
+                if let Ok(mut g) = crate::BUBBLE_SITE_PACKAGES_CACHE.lock() { *g = Some(std::sync::Arc::new(sp.clone())); }
             }
-            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-site-packages-scan: {:.2}ms (fresh{})", _t_sp.elapsed().as_secs_f64()*1000.0, if is_bubble { "/bubble" } else { "" }); }
+            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) {
+                eprintln!("[UV-PROFILE] post-site-packages-scan: {:.2}ms (fresh{})",
+                    _t_sp.elapsed().as_secs_f64()*1000.0,
+                    if is_bubble { "/bubble" } else { "" });
+            }
             sp
         }
     };
@@ -691,7 +733,7 @@ pub async fn pip_install(
     // Sync the environment.
     match operations::install(
         &resolution,
-        site_packages,
+        site_packages.clone(),
         InstallationStrategy::Permissive,
         modifications,
         &reinstall,
@@ -718,20 +760,19 @@ pub async fn pip_install(
             let _post_install_start = std::time::Instant::now();
             let _t_after_install = std::time::Instant::now();
             if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-install-write: done"); }
-            let _sync_start = std::time::Instant::now();
-            if !crate::BUBBLE_INSTALL.load(std::sync::atomic::Ordering::SeqCst) {
-            if let Ok(mut sp_cache) = crate::SITE_PACKAGES_CACHE.try_lock() {
-                if let Some(ref mut sp) = *sp_cache {
-                    use uv_distribution_types::{Name, InstalledDist, InstalledDistKind, InstalledRegistryDist};
+
+            if is_bubble {
+                // Bubble install: patch BUBBLE_SITE_PACKAGES_CACHE with delta,
+                // then drain changelog. install.rs owns this — lib.rs reads it back.
+                use uv_distribution_types::{Name, InstalledDist, InstalledDistKind, InstalledRegistryDist};
+                if let Ok(mut g) = crate::BUBBLE_SITE_PACKAGES_CACHE.lock() {
+                    // Start from whatever was in the cache (may be None on first install)
+                    let mut sp = g.take().map(|arc| std::sync::Arc::try_unwrap(arc).unwrap_or_else(|a| (*a).clone())).unwrap_or_else(|| site_packages.clone());
                     for dist in &changelog.uninstalled { sp.remove_packages(dist.name()); }
                     for dist in &changelog.reinstalled { sp.remove_packages(dist.name()); }
                     for dist in &changelog.installed {
                         sp.remove_packages(dist.name());
                         if let Some(version) = dist.version() {
-                            // Construct directly from known data — no disk I/O needed.
-                            // try_from_path reads cache_info + build_info from dist-info
-                            // on disk which costs 5-6ms. For registry installs those
-                            // fields are None/default and we already know name+version+path.
                             let dist_info_name = format!(
                                 "{}-{}.dist-info",
                                 dist.name().as_dist_info_name(),
@@ -750,20 +791,53 @@ pub async fn pip_install(
                             sp.add_dist(installed);
                         }
                     }
+                    *g = Some(std::sync::Arc::new(sp));
                 }
-            }
-            } // end !BUBBLE_INSTALL guard
-            if crate::BUBBLE_INSTALL.load(std::sync::atomic::Ordering::SeqCst) {
-                // Bubble install — drain changelog without writing to statics
-                drop(changelog);
+                let _t_drop = std::time::Instant::now();
+                if let Ok(mut g) = crate::INSTALL_CHANGELOG.lock() { *g = Some(changelog); }
+                if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-SYNC] Bubble cache update: done"); }
+                if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] drop(changelog): {:.2}ms", _t_drop.elapsed().as_secs_f64()*1000.0); }
             } else {
-            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-SYNC] Zero-disk cache update: done"); }
-            let _t_cl_lock = std::time::Instant::now();
-            if let Ok(mut g) = crate::INSTALL_CHANGELOG.lock() { *g = Some(changelog); }
-            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-changelog-lock: {:.3?}", _t_cl_lock.elapsed()); }
-            } // end else !BUBBLE_INSTALL
+                // Main env: patch SITE_PACKAGES_CACHE with delta
+                use uv_distribution_types::{Name, InstalledDist, InstalledDistKind, InstalledRegistryDist};
+                if let Ok(mut sp_cache) = crate::SITE_PACKAGES_CACHE.try_lock() {
+                    if let Some(ref mut arc) = *sp_cache {
+                        let sp = std::sync::Arc::make_mut(arc);
+                        for dist in &changelog.uninstalled { sp.remove_packages(dist.name()); }
+                        for dist in &changelog.reinstalled { sp.remove_packages(dist.name()); }
+                        for dist in &changelog.installed {
+                            sp.remove_packages(dist.name());
+                            if let Some(version) = dist.version() {
+                                let dist_info_name = format!(
+                                    "{}-{}.dist-info",
+                                    dist.name().as_dist_info_name(),
+                                    version
+                                );
+                                let dist_info_path = sp.interpreter().purelib().join(&dist_info_name);
+                                let installed = InstalledDist::from(InstalledDistKind::Registry(
+                                    InstalledRegistryDist {
+                                        name: dist.name().clone(),
+                                        version: version.clone(),
+                                        path: dist_info_path.into_boxed_path(),
+                                        cache_info: None,
+                                        build_info: None,
+                                    },
+                                ));
+                                sp.add_dist(installed);
+                            }
+                        }
+                    }
+                }
+                if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-SYNC] Zero-disk cache update: done"); }
+                let _t_cl_lock = std::time::Instant::now();
+                if let Ok(mut g) = crate::INSTALL_CHANGELOG.lock() { *g = Some(changelog); }
+                if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-changelog-lock: {:.3?}", _t_cl_lock.elapsed()); }
+            }
+
             if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-changelog-write: {:.2}ms (since install complete: {:.2}ms)", start.elapsed().as_secs_f64()*1000.0, _t_after_install.elapsed().as_secs_f64()*1000.0); }
             if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] post-install-overhead: {:.2}ms", _post_install_start.elapsed().as_secs_f64()*1000.0); }
+            if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) { eprintln!("[UV-PROFILE] pre-scope-drop: {:.2}ms", _t_after_install.elapsed().as_secs_f64()*1000.0); }
+
         }
         Err(err) => {
             return diagnostics::OperationDiagnostic::native_tls(client_builder.is_native_tls())

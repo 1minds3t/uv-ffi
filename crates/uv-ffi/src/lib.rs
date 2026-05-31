@@ -40,6 +40,17 @@ static ENGINE: OnceLock<UvEngine> = OnceLock::new();
 // the target dir as a clean slate and never cross-contaminates main env.
 static BUBBLE_ENVIRONMENT: OnceLock<uv_python::PythonEnvironment> = OnceLock::new();
 
+use std::collections::HashMap;
+use uv_installer::SitePackages;
+
+// Per-target in-memory SitePackages cache — only for omnipkg-managed bubble dirs.
+// Keyed by canonical target path string. Never populated for ad-hoc --target dirs.
+static BUBBLE_CACHE: once_cell::sync::Lazy<std::sync::Mutex<HashMap<String, SitePackages>>> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+fn is_managed_bubble(target_dir: &str) -> bool {
+    target_dir.contains(".omnipkg_versions")
+}
+
 fn get_engine(python_exe: &str) -> &'static UvEngine {
     ENGINE.get_or_init(|| {
         let cache_dir = std::env::var("UV_CACHE_DIR")
@@ -116,21 +127,37 @@ async fn run_pip_install_direct(
     use uv_preview::Preview;
     use uv_requirements::specification::GroupsSpecification;
     use std::str::FromStr;
+    // ── Early-exit for already-satisfied --target installs ────────────
+    if let Some(ref tdir) = target_dir {
+        if is_managed_bubble(tdir.as_str()) {
+            uv::BUBBLE_INSTALL.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        let target_path = std::path::Path::new(tdir);
+        let all_satisfied = packages.iter().all(|pkg_spec| {
+            if let Some((name, ver)) = pkg_spec.split_once("==") {
+                let normalized = name.replace('-', "_").to_lowercase();
+                let dist_info = format!("{}-{}.dist-info", normalized, ver);
+                target_path.join(&dist_info).exists()
+            } else {
+                false
+            }
+        });
+        if all_satisfied && !packages.is_empty() {
+            uv::BUBBLE_INSTALL.store(false, std::sync::atomic::Ordering::SeqCst);
+            return Ok(Changelog::default());
+        }
+    }
 
-    let engine = get_engine(python_exe);
+        let engine = get_engine(python_exe);
 
-    let target = target_dir.map(|p| Target::from(std::path::PathBuf::from(p)));
+    let target = target_dir.as_deref().map(|p| Target::from(std::path::PathBuf::from(p)));
 
-    // Seed PYTHON_ENVIRONMENT based on install destination:
-    //   main env  → real site-packages (resolver sees what's installed, skips existing deps)
-    //   --target  → empty bubble env   (resolver sees nothing, installs full self-contained set)
-    // BUBBLE_ENVIRONMENT is constructed once and reused — interpreter/platform are warm,
-    // but no dist-info scan ever runs against it, so it always looks empty to the resolver.
     if target.is_some() {
         let bubble_env = BUBBLE_ENVIRONMENT.get_or_init(|| {
             uv_python::PythonEnvironment::from_interpreter(engine.interpreter.clone())
         });
         if let Ok(mut g) = uv::PYTHON_ENVIRONMENT.lock() { *g = Some(bubble_env.clone()); }
+
         uv::BUBBLE_INSTALL.store(true, std::sync::atomic::Ordering::SeqCst);
     } else {
         let env = uv_python::PythonEnvironment::from_interpreter(engine.interpreter.clone());
@@ -245,16 +272,16 @@ async fn run_pip_install_direct(
         uv::commands::ExitStatus::External(code) => Err(anyhow::anyhow!("pip_install failed: external process exited with code {}", code)),
     })?;
 
-    // Reset flag so the next main-env install is never affected.
+    // Reset flag
     uv::BUBBLE_INSTALL.store(false, std::sync::atomic::Ordering::SeqCst);
 
-    // Drain changelog — for bubble installs install.rs already dropped it,
-    // for main installs take it normally.
+    let _t_cl = std::time::Instant::now();
     let changelog = uv::INSTALL_CHANGELOG.lock().ok()
         .and_then(|mut g| g.take())
         .unwrap_or_default();
-
+    if is_profile_enabled() { eprintln!("[UV-PROFILE] post-changelog-lock (lib): {:.2}ms", _t_cl.elapsed().as_secs_f64()*1000.0); }
     Ok(changelog)
+
 }
 // ── End UvEngine ──────────────────────────────────────────────────────────────
 
@@ -519,6 +546,11 @@ fn run_uv(cmd: &str) -> (i32, Option<Changelog>, String) {
 }
 
 #[pyo3::pyfunction]
+fn evict_bubble_cache() {
+    if let Ok(mut g) = uv::BUBBLE_SITE_PACKAGES_CACHE.lock() { *g = None; }
+}
+
+#[pyo3::pyfunction]
 fn get_site_packages_cache() -> Vec<(String, String)> {
     let Ok(guard) = uv::SITE_PACKAGES_CACHE.try_lock() else {
         return vec![];
@@ -578,11 +610,12 @@ fn patch_site_packages_cache(
         // up to date when it finishes.
         return false;
     };
-    let Some(ref mut sp) = *sp_guard else {
+    let Some(ref mut arc) = *sp_guard else {
         // Cache not populated yet — nothing to patch, first install will
         // do a fresh scan anyway.
         return false;
     };
+    let sp = std::sync::Arc::make_mut(arc);
 
     // Apply removals first so a swap (remove old + add new) stays coherent.
     for pair in &removed {
@@ -637,6 +670,7 @@ fn uv_ffi(_py: pyo3::Python, m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3
     m.add_function(pyo3::wrap_pyfunction!(patch_site_packages_cache, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(get_site_packages_cache, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(clear_registry_cache, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(evict_bubble_cache, m)?)?;
     Ok(())
 }
 

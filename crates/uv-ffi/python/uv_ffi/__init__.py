@@ -7,6 +7,7 @@ try:
         invalidate_site_packages_cache,
         patch_site_packages_cache,
         clear_registry_cache,
+        evict_bubble_cache,
     )
 except ImportError as _e:
     import platform as _platform
@@ -33,4 +34,5 @@ __all__ = [
     "patch_site_packages_cache",
     "clear_registry_cache",
     "__version__",
+    "evict_bubble_cache"
 ]
