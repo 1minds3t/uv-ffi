@@ -28,8 +28,8 @@ use std::sync::Arc;
 
 pub static SITE_PACKAGES_CACHE: std::sync::Mutex<Option<Arc<uv_installer::SitePackages>>> =
     std::sync::Mutex::new(None);
-pub static BUBBLE_SITE_PACKAGES_CACHE: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, Arc<uv_installer::SitePackages>>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+pub static BUBBLE_SITE_PACKAGES_CACHE: std::sync::Mutex<Option<Arc<uv_installer::SitePackages>>> =
+    std::sync::Mutex::new(None);
 pub static FORCE_RESCAN: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(true);
 pub static FFI_PROFILE: std::sync::atomic::AtomicBool =

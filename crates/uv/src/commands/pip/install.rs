@@ -338,9 +338,8 @@ pub async fn pip_install(
         let cached = if !is_bubble && !force {
             crate::SITE_PACKAGES_CACHE.lock().ok().and_then(|g| g.as_ref().map(|arc| (**arc).clone()))
         } else if is_bubble && !force {
-            let key = bubble_target_root.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
             crate::BUBBLE_SITE_PACKAGES_CACHE.lock().ok()
-                .and_then(|g| g.get(&key).map(|arc| (**arc).clone()))
+                .and_then(|g| g.as_ref().map(|arc| (**arc).clone()))
         } else {
             None
         };
@@ -374,8 +373,7 @@ pub async fn pip_install(
             if !is_bubble {
                 if let Ok(mut g) = crate::SITE_PACKAGES_CACHE.lock() { *g = Some(std::sync::Arc::new(sp.clone())); }
             } else {
-                let key = bubble_target_root.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-                if let Ok(mut g) = crate::BUBBLE_SITE_PACKAGES_CACHE.lock() { g.insert(key, std::sync::Arc::new(sp.clone())); }
+                if let Ok(mut g) = crate::BUBBLE_SITE_PACKAGES_CACHE.lock() { *g = Some(std::sync::Arc::new(sp.clone())); }
             }
             crate::FORCE_RESCAN.store(false, std::sync::atomic::Ordering::SeqCst);
             if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) {
@@ -775,7 +773,7 @@ pub async fn pip_install(
                 use uv_distribution_types::{Name, InstalledDist, InstalledDistKind, InstalledRegistryDist};
                  let _bubble_key = bubble_target_root.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
                 if let Ok(mut g) = crate::BUBBLE_SITE_PACKAGES_CACHE.lock() {
-                    let mut sp = g.remove(&_bubble_key).map(|arc| std::sync::Arc::try_unwrap(arc).unwrap_or_else(|a| (*a).clone())).unwrap_or_else(|| site_packages.clone());
+                    let mut sp = g.take().map(|arc| std::sync::Arc::try_unwrap(arc).unwrap_or_else(|a| (*a).clone())).unwrap_or_else(|| site_packages.clone());
                     for dist in &changelog.uninstalled { sp.remove_packages(dist.name()); }
                     for dist in &changelog.reinstalled { sp.remove_packages(dist.name()); }
                     for dist in &changelog.installed {
@@ -805,7 +803,7 @@ pub async fn pip_install(
                             sp.add_dist(installed);
                         }
                     }
-                    g.insert(_bubble_key, std::sync::Arc::new(sp));
+                    *g = Some(std::sync::Arc::new(sp));
                 }
                 let _t_drop = std::time::Instant::now();
                 if let Ok(mut g) = crate::INSTALL_CHANGELOG.lock() { *g = Some(changelog); }

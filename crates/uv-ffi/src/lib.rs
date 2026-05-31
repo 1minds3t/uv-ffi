@@ -537,7 +537,7 @@ fn run_uv(cmd: &str) -> (i32, Option<Changelog>, String) {
         }
         // Also evict bubble cache — stale dist-info paths from deleted bubbles
         // cause the same rc=1 failure and need the same treatment.
-        if let Ok(mut g) = uv::BUBBLE_SITE_PACKAGES_CACHE.lock() { g.clear(); }
+        if let Ok(mut g) = uv::BUBBLE_SITE_PACKAGES_CACHE.lock() { *g = None; }
         return run_uv_internal(cmd);
     }
 
@@ -546,7 +546,7 @@ fn run_uv(cmd: &str) -> (i32, Option<Changelog>, String) {
 
 #[pyo3::pyfunction]
 fn evict_bubble_cache() {
-    if let Ok(mut g) = uv::BUBBLE_SITE_PACKAGES_CACHE.lock() { g.clear(); }
+    if let Ok(mut g) = uv::BUBBLE_SITE_PACKAGES_CACHE.lock() { *g = None; }
 }
 
 #[pyo3::pyfunction]
@@ -667,10 +667,10 @@ fn patch_bubble_site_packages_cache(
     use std::str::FromStr;
 
     let Ok(mut g) = uv::BUBBLE_SITE_PACKAGES_CACHE.lock() else { return false; };
-    if g.is_empty() { return false; }
-
-    for (_key, arc) in g.iter_mut() {
-        let mut sp = std::sync::Arc::try_unwrap(arc.clone()).unwrap_or_else(|a| (*a).clone());
+    if g.is_none() { return false; }
+    let arc = g.as_mut().unwrap();
+    {
+        let mut sp = std::sync::Arc::try_unwrap(arc.clone()).unwrap_or_else(|a: std::sync::Arc<uv_installer::SitePackages>| (*a).clone());
         for pair in &removed {
             if pair.len() < 1 { continue; }
             if let Ok(pkg_name) = PackageName::from_str(&pair[0]) {
@@ -690,7 +690,7 @@ fn patch_bubble_site_packages_cache(
                 cache_info: None, build_info: None,
             })));
         }
-        eprintln!("[UV-FFI] patch_bubble: key={} now has {} pkgs", _key, sp.iter().count());
+        eprintln!("[UV-FFI] patch_bubble: now has {} pkgs", sp.iter().count());
         *arc = std::sync::Arc::new(sp);
     }
     true
@@ -706,20 +706,19 @@ fn clear_registry_cache() {
 #[pyo3::pyfunction]
 fn evict_packages_from_bubble_cache(names: Vec<String>) {
     let Ok(mut g) = uv::BUBBLE_SITE_PACKAGES_CACHE.lock() else { return; };
-    if g.is_empty() {
+    if g.is_none() {
         eprintln!("[UV-FFI] evict_packages_from_bubble_cache: cache EMPTY");
         return;
     }
-    for (key, arc) in g.iter_mut() {
-        let mut sp = std::sync::Arc::try_unwrap(arc.clone()).unwrap_or_else(|a| (*a).clone());
-        for name in &names {
-            if let Ok(pkg_name) = uv_normalize::PackageName::from_owned(name.clone()) {
-                sp.remove_packages(&pkg_name);
-            }
+    let arc = g.as_mut().unwrap();
+    let mut sp = std::sync::Arc::try_unwrap(arc.clone()).unwrap_or_else(|a: std::sync::Arc<uv_installer::SitePackages>| (*a).clone());
+    for name in &names {
+        if let Ok(pkg_name) = uv_normalize::PackageName::from_owned(name.clone()) {
+            sp.remove_packages(&pkg_name);
         }
-        eprintln!("[UV-FFI] evict: key={} remaining={}", key, sp.iter().count());
-        *arc = std::sync::Arc::new(sp);
     }
+    eprintln!("[UV-FFI] evict: remaining={}", sp.iter().count());
+    *arc = std::sync::Arc::new(sp);
 }
 
 #[pyo3::pymodule]
