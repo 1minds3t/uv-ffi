@@ -40,7 +40,7 @@ static ENGINE: OnceLock<UvEngine> = OnceLock::new();
 // the target dir as a clean slate and never cross-contaminates main env.
 
 fn is_managed_bubble(target_dir: &str) -> bool {
-    target_dir.contains(".omnipkg_versions")
+    target_dir.contains(".omnipkg_versions") && !target_dir.contains(".omnipkg_staging")
 }
 
 fn get_engine(python_exe: &str) -> &'static UvEngine {
