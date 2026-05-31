@@ -187,29 +187,11 @@ pub async fn pip_install(
     let environment = if target.is_some() || prefix.is_some() {
         // For BUBBLE_INSTALL, the FFI layer pre-warms PYTHON_ENVIRONMENT with the bubble env.
         // Reuse it to avoid ~35ms find_or_download on every bubble call.
-        if crate::BUBBLE_INSTALL.load(std::sync::atomic::Ordering::SeqCst) {
-            if let Some(env) = crate::PYTHON_ENVIRONMENT.lock().ok().and_then(|g| g.clone()) {
-                env
-            } else {
-                let python_request = python.as_deref().map(PythonRequest::parse);
-                let reporter = PythonDownloadReporter::single(printer);
-                let installation = PythonInstallation::find_or_download(
-                    python_request.as_ref(),
-                    EnvironmentPreference::from_system_flag(system, false),
-                    python_preference.with_system_flag(system),
-                    python_downloads,
-                    &client_builder,
-                    &cache,
-                    Some(&reporter),
-                    install_mirrors.python_install_mirror.as_deref(),
-                    install_mirrors.pypy_install_mirror.as_deref(),
-                    install_mirrors.python_downloads_json_url.as_deref(),
-                    preview,
-                )
-                .await?;
-                report_interpreter(&installation, true, printer)?;
-                PythonEnvironment::from_installation(installation)
-            }
+        // Reuse cached PythonEnvironment regardless of BUBBLE_INSTALL flag.
+        // BUBBLE_INSTALL only gates cache routing (BUBBLE_SITE_PACKAGES_CACHE vs
+        // SITE_PACKAGES_CACHE) — it no longer controls which env object is used here.
+        if let Some(env) = crate::PYTHON_ENVIRONMENT.lock().ok().and_then(|g| g.clone()) {
+            env
         } else {
             let python_request = python.as_deref().map(PythonRequest::parse);
             let reporter = PythonDownloadReporter::single(printer);
@@ -228,7 +210,9 @@ pub async fn pip_install(
             )
             .await?;
             report_interpreter(&installation, true, printer)?;
-            PythonEnvironment::from_installation(installation)
+            let env = PythonEnvironment::from_installation(installation);
+            if let Ok(mut g) = crate::PYTHON_ENVIRONMENT.lock() { *g = Some(env.clone()); }
+            env
         }
     } else {
         // Reuse cached PythonEnvironment if available — avoids filesystem search every call.
@@ -260,7 +244,10 @@ pub async fn pip_install(
         LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
             .into_inner();
 
-    // Apply any `--target` or `--prefix` directories.
+     // Apply any `--target` or `--prefix` directories.
+    // Capture the bubble target root BEFORE with_target() moves the value,
+    // so the changelog patch below can build correct dist-info paths.
+    let bubble_target_root: Option<std::path::PathBuf> = target.as_ref().map(|t| t.root().to_path_buf());
     let environment = if let Some(target) = target {
         debug!(
             "Using `--target` directory at {}",
@@ -350,10 +337,10 @@ pub async fn pip_install(
         // install to think nothing is installed and short-circuit satisfies_spec.
         let cached = if !is_bubble && !force {
             crate::SITE_PACKAGES_CACHE.lock().ok().and_then(|g| g.as_ref().map(|arc| (**arc).clone()))
-        } else if is_bubble {
-            // Check per-target bubble cache (managed dirs only — gated in lib.rs)
+        } else if is_bubble && !force {
+            let key = bubble_target_root.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
             crate::BUBBLE_SITE_PACKAGES_CACHE.lock().ok()
-                .and_then(|g| g.as_ref().map(|arc| (**arc).clone()))
+                .and_then(|g| g.get(&key).map(|arc| (**arc).clone()))
         } else {
             None
         };
@@ -365,17 +352,38 @@ pub async fn pip_install(
             }
             sp
         } else {
-            let sp = SitePackages::from_environment(&environment)?;
+            // For bubble installs, scan ONLY the target directory — not the merged
+            // view that with_target() produces (which includes main site-packages).
+            // Scanning the merged view poisons BUBBLE_SITE_PACKAGES_CACHE with main-env
+            // packages, causing the resolver to emit spurious uninstalls against the
+            // real main site-packages on disk.
+            let sp = if is_bubble {
+                // For bubble installs, scan only the bare interpreter env (no
+                // merged main site-packages). with_target() merges the conda
+                // env's ~800 packages into the site_packages view, which the
+                // resolver processes as preferences and costs ~17ms extra.
+                // A clean interpreter env gives the resolver a zero-package
+                // baseline — same as what /tmp targets see.
+                let bare_env = uv_python::PythonEnvironment::from_interpreter(
+                    environment.interpreter().clone()
+                );
+                SitePackages::from_environment(&bare_env)?
+            } else {
+                SitePackages::from_environment(&environment)?
+            };
             if !is_bubble {
                 if let Ok(mut g) = crate::SITE_PACKAGES_CACHE.lock() { *g = Some(std::sync::Arc::new(sp.clone())); }
-                crate::FORCE_RESCAN.store(false, std::sync::atomic::Ordering::SeqCst);
             } else {
-                if let Ok(mut g) = crate::BUBBLE_SITE_PACKAGES_CACHE.lock() { *g = Some(std::sync::Arc::new(sp.clone())); }
+                let key = bubble_target_root.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+                if let Ok(mut g) = crate::BUBBLE_SITE_PACKAGES_CACHE.lock() { g.insert(key, std::sync::Arc::new(sp.clone())); }
             }
+            crate::FORCE_RESCAN.store(false, std::sync::atomic::Ordering::SeqCst);
             if crate::FFI_PROFILE.load(std::sync::atomic::Ordering::Relaxed) {
-                eprintln!("[UV-PROFILE] post-site-packages-scan: {:.2}ms (fresh{})",
+                eprintln!("[UV-PROFILE] post-site-packages-scan: {:.2}ms (fresh{}) force={} cache_was_none=true count={}",
                     _t_sp.elapsed().as_secs_f64()*1000.0,
-                    if is_bubble { "/bubble" } else { "" });
+                    if is_bubble { "/bubble" } else { "" },
+                    force,
+                    sp.iter().count());
             }
             sp
         }
@@ -765,9 +773,9 @@ pub async fn pip_install(
                 // Bubble install: patch BUBBLE_SITE_PACKAGES_CACHE with delta,
                 // then drain changelog. install.rs owns this — lib.rs reads it back.
                 use uv_distribution_types::{Name, InstalledDist, InstalledDistKind, InstalledRegistryDist};
+                 let _bubble_key = bubble_target_root.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
                 if let Ok(mut g) = crate::BUBBLE_SITE_PACKAGES_CACHE.lock() {
-                    // Start from whatever was in the cache (may be None on first install)
-                    let mut sp = g.take().map(|arc| std::sync::Arc::try_unwrap(arc).unwrap_or_else(|a| (*a).clone())).unwrap_or_else(|| site_packages.clone());
+                    let mut sp = g.remove(&_bubble_key).map(|arc| std::sync::Arc::try_unwrap(arc).unwrap_or_else(|a| (*a).clone())).unwrap_or_else(|| site_packages.clone());
                     for dist in &changelog.uninstalled { sp.remove_packages(dist.name()); }
                     for dist in &changelog.reinstalled { sp.remove_packages(dist.name()); }
                     for dist in &changelog.installed {
@@ -778,7 +786,13 @@ pub async fn pip_install(
                                 dist.name().as_dist_info_name(),
                                 version
                             );
-                            let dist_info_path = sp.interpreter().purelib().join(&dist_info_name);
+                            // --target installs place dist-info directly in the target
+                            // root, NOT in purelib(). Using purelib() here was pointing
+                            // at main site-packages and corrupting future cache lookups.
+                            let dist_info_path = bubble_target_root
+                                .as_ref()
+                                .map(|r| r.join(&dist_info_name))
+                                .unwrap_or_else(|| sp.interpreter().purelib().join(&dist_info_name));
                             let installed = InstalledDist::from(InstalledDistKind::Registry(
                                 InstalledRegistryDist {
                                     name: dist.name().clone(),
@@ -791,7 +805,7 @@ pub async fn pip_install(
                             sp.add_dist(installed);
                         }
                     }
-                    *g = Some(std::sync::Arc::new(sp));
+                    g.insert(_bubble_key, std::sync::Arc::new(sp));
                 }
                 let _t_drop = std::time::Instant::now();
                 if let Ok(mut g) = crate::INSTALL_CHANGELOG.lock() { *g = Some(changelog); }

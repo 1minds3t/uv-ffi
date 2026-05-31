@@ -38,14 +38,6 @@ static ENGINE: OnceLock<UvEngine> = OnceLock::new();
 // Shares the interpreter (platform, markers, python version) with ENGINE
 // but intentionally has no installed packages — so uv's resolver treats
 // the target dir as a clean slate and never cross-contaminates main env.
-static BUBBLE_ENVIRONMENT: OnceLock<uv_python::PythonEnvironment> = OnceLock::new();
-
-use std::collections::HashMap;
-use uv_installer::SitePackages;
-
-// Per-target in-memory SitePackages cache — only for omnipkg-managed bubble dirs.
-// Keyed by canonical target path string. Never populated for ad-hoc --target dirs.
-static BUBBLE_CACHE: once_cell::sync::Lazy<std::sync::Mutex<HashMap<String, SitePackages>>> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
 fn is_managed_bubble(target_dir: &str) -> bool {
     target_dir.contains(".omnipkg_versions")
@@ -129,7 +121,9 @@ async fn run_pip_install_direct(
     use std::str::FromStr;
     // ── Early-exit for already-satisfied --target installs ────────────
     if let Some(ref tdir) = target_dir {
-        if is_managed_bubble(tdir.as_str()) {
+        let _is_managed = is_managed_bubble(tdir.as_str());
+        eprintln!("[UV-FFI] target_dir={} is_managed_bubble={}", tdir, _is_managed);
+        if _is_managed {
             uv::BUBBLE_INSTALL.store(true, std::sync::atomic::Ordering::SeqCst);
         }
         let target_path = std::path::Path::new(tdir);
@@ -152,17 +146,18 @@ async fn run_pip_install_direct(
 
     let target = target_dir.as_deref().map(|p| Target::from(std::path::PathBuf::from(p)));
 
-    if target.is_some() {
-        let bubble_env = BUBBLE_ENVIRONMENT.get_or_init(|| {
-            uv_python::PythonEnvironment::from_interpreter(engine.interpreter.clone())
-        });
-        if let Ok(mut g) = uv::PYTHON_ENVIRONMENT.lock() { *g = Some(bubble_env.clone()); }
-
-        uv::BUBBLE_INSTALL.store(true, std::sync::atomic::Ordering::SeqCst);
-    } else {
-        let env = uv_python::PythonEnvironment::from_interpreter(engine.interpreter.clone());
-        if let Ok(mut g) = uv::PYTHON_ENVIRONMENT.lock() { *g = Some(env); }
-        uv::BUBBLE_INSTALL.store(false, std::sync::atomic::Ordering::SeqCst);
+    {
+        // Both bubble and non-bubble installs share the same PythonEnvironment.
+        // The old BUBBLE_ENVIRONMENT used from_interpreter() which produces a bare env
+        // that causes the resolver to do ~17ms extra work vs a proper venv-rooted env.
+        // PYTHON_ENVIRONMENT is populated once and reused; install.rs still routes
+        // cache writes to BUBBLE_SITE_PACKAGES_CACHE vs SITE_PACKAGES_CACHE via is_bubble.
+        let needs_init = uv::PYTHON_ENVIRONMENT.lock().map(|g| g.is_none()).unwrap_or(false);
+        if needs_init {
+            let env = uv_python::PythonEnvironment::from_interpreter(engine.interpreter.clone());
+            if let Ok(mut g) = uv::PYTHON_ENVIRONMENT.lock() { *g = Some(env); }
+        }
+        uv::BUBBLE_INSTALL.store(target.is_some(), std::sync::atomic::Ordering::SeqCst);
     }
 
     let requirements: Vec<RequirementsSource> = packages.iter()
@@ -399,6 +394,7 @@ fn try_parse_ffi_install(cmd: &str) -> Option<FfiInstallOpts> {
 }
 
 
+
 fn build_fast_cli(opts: FfiInstallOpts) -> uv_cli::Cli {
     use uv_cli::{
         TopLevelArgs, GlobalArgs,
@@ -539,6 +535,9 @@ fn run_uv(cmd: &str) -> (i32, Option<Changelog>, String) {
         if let Ok(mut g) = uv::REGISTRY_CLIENT.lock() {
             *g = None;
         }
+        // Also evict bubble cache — stale dist-info paths from deleted bubbles
+        // cause the same rc=1 failure and need the same treatment.
+        if let Ok(mut g) = uv::BUBBLE_SITE_PACKAGES_CACHE.lock() { g.clear(); }
         return run_uv_internal(cmd);
     }
 
@@ -547,7 +546,7 @@ fn run_uv(cmd: &str) -> (i32, Option<Changelog>, String) {
 
 #[pyo3::pyfunction]
 fn evict_bubble_cache() {
-    if let Ok(mut g) = uv::BUBBLE_SITE_PACKAGES_CACHE.lock() { *g = None; }
+    if let Ok(mut g) = uv::BUBBLE_SITE_PACKAGES_CACHE.lock() { g.clear(); }
 }
 
 #[pyo3::pyfunction]
@@ -595,6 +594,7 @@ fn invalidate_site_packages_cache() {
 ///
 /// Accepts both Python lists and tuples for the inner pairs.
 /// Returns True if the cache was patched, False if no cache was live.
+
 #[pyo3::pyfunction]
 fn patch_site_packages_cache(
     installed: Vec<Vec<String>>,
@@ -657,9 +657,68 @@ fn patch_site_packages_cache(
 }
 
 #[pyo3::pyfunction]
+fn patch_bubble_site_packages_cache(
+    installed: Vec<Vec<String>>,
+    removed:   Vec<Vec<String>>,
+) -> bool {
+    use uv_distribution_types::{InstalledDist, InstalledDistKind, InstalledRegistryDist};
+    use uv_normalize::PackageName;
+    use uv_pep440::Version;
+    use std::str::FromStr;
+
+    let Ok(mut g) = uv::BUBBLE_SITE_PACKAGES_CACHE.lock() else { return false; };
+    if g.is_empty() { return false; }
+
+    for (_key, arc) in g.iter_mut() {
+        let mut sp = std::sync::Arc::try_unwrap(arc.clone()).unwrap_or_else(|a| (*a).clone());
+        for pair in &removed {
+            if pair.len() < 1 { continue; }
+            if let Ok(pkg_name) = PackageName::from_str(&pair[0]) {
+                eprintln!("[UV-FFI] patch_bubble: removing '{}'", pkg_name);
+                sp.remove_packages(&pkg_name);
+            }
+        }
+        for pair in &installed {
+            if pair.len() < 2 { continue; }
+            let (Ok(pkg_name), Ok(version)) = (PackageName::from_str(&pair[0]), Version::from_str(&pair[1])) else { continue; };
+            sp.remove_packages(&pkg_name);
+            let dist_info_name = format!("{}-{}.dist-info", pkg_name.as_dist_info_name(), version);
+            let dist_info_path = sp.interpreter().purelib().join(&dist_info_name);
+            eprintln!("[UV-FFI] patch_bubble: adding '{}=={}'", pkg_name, version);
+            sp.add_dist(InstalledDist::from(InstalledDistKind::Registry(InstalledRegistryDist {
+                name: pkg_name, version, path: dist_info_path.into_boxed_path(),
+                cache_info: None, build_info: None,
+            })));
+        }
+        eprintln!("[UV-FFI] patch_bubble: key={} now has {} pkgs", _key, sp.iter().count());
+        *arc = std::sync::Arc::new(sp);
+    }
+    true
+}
+
+#[pyo3::pyfunction]
 fn clear_registry_cache() {
     if let Ok(mut g) = uv::REGISTRY_CLIENT.lock() {
         *g = None;
+    }
+}
+
+#[pyo3::pyfunction]
+fn evict_packages_from_bubble_cache(names: Vec<String>) {
+    let Ok(mut g) = uv::BUBBLE_SITE_PACKAGES_CACHE.lock() else { return; };
+    if g.is_empty() {
+        eprintln!("[UV-FFI] evict_packages_from_bubble_cache: cache EMPTY");
+        return;
+    }
+    for (key, arc) in g.iter_mut() {
+        let mut sp = std::sync::Arc::try_unwrap(arc.clone()).unwrap_or_else(|a| (*a).clone());
+        for name in &names {
+            if let Ok(pkg_name) = uv_normalize::PackageName::from_owned(name.clone()) {
+                sp.remove_packages(&pkg_name);
+            }
+        }
+        eprintln!("[UV-FFI] evict: key={} remaining={}", key, sp.iter().count());
+        *arc = std::sync::Arc::new(sp);
     }
 }
 
@@ -671,6 +730,8 @@ fn uv_ffi(_py: pyo3::Python, m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3
     m.add_function(pyo3::wrap_pyfunction!(get_site_packages_cache, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(clear_registry_cache, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(evict_bubble_cache, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(evict_packages_from_bubble_cache, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(patch_bubble_site_packages_cache, m)?)?;
     Ok(())
 }
 
