@@ -43,6 +43,6 @@ Omnipkg = "https://pypi.org/project/omnipkg/"
 
 [tool.maturin]
 module-name = "uv_ffi._native"
-python-packages = ["python"]
+python-packages = ["uv_ffi"]
 python-source = "python"
 include = ["LICENSE-MIT", "NOTICE"]
