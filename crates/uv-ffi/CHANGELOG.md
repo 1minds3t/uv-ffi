@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8.post15] — 2026-06-05
+
+Self-Healing Bubble Installs, Plan IPC, and 12ms Persistence
+
+This is a landmark architectural release for `uv-ffi`. It introduces atomic, self-healing persistent states for isolated `--target` environments ("bubbles"), establishes a bidirectional IPC contract between Rust and Python, and drops cache-warm installation latency to ~12ms.
+
+`uv` traditionally assumes a perfectly healthy filesystem, leading to ghost files or fatal panics when the environment or cache is externally modified. `uv-ffi` now implements a pre-flight surgical healing pipeline for `--target` installs:
+* **Ghost `dist-info` Eviction:** Detects metadata without matching package directories and evicts them prior to resolution so the planner sees the correct filesystem state.
+* **Orphan Dir Wipe:** Detects package directories without matching `.dist-info` metadata and wipes them before the Installer runs. This guarantees stale `.py` files don't persist across interrupted version changes.
+* **Corrupted Cache Retry:** Intercepts `uv`'s fatal `archive-v0` cache panics (e.g., mismatched wheel versions), surgically evicts the corrupted archive on disk, and automatically forces a rescan and retry.
+
+* Rust now publishes resolved plan entries (`cached`, `remote`, `reinstall`, `extraneous`) to a static `INSTALL_PLAN` and fires a `PLAN_READY_CALLBACK` before execution.
+* Python can now intercept the installation plan via `set_plan_callback()` and optionally return `True` to gracefully short-circuit the Rust installer, allowing Python to take ownership of the operation.
+
+* **12ms Bubble Installs:** Implemented a persistent `BUBBLE_SITE_PACKAGES_CACHE`. Bubble target states are now cached in memory entirely decoupled from the main environment, dropping `--target` installation latency from 30ms to ~12ms.
+* **Surgical Cache Control:** Added `evict_packages_from_bubble_cache` and `patch_bubble_site_packages_cache` pyfunctions for Python-side memory map updates without requiring a 2.5ms disk rescan.
+
+* **Native Module Rename:** Renamed the native extension from `uv_ffi.uv_ffi` to `uv_ffi._native`. This prevents the `.so` binary from hijacking the Python module namespace during import.
+* **Docstring & Type Contract:** Completely overhauled `uv_ffi/__init__.py`. Added comprehensive IPC contract documentation, data flow maps, type-hinted wrappers, and `_noop` safety stubs for legacy binaries to prevent `AttributeError` crashes on older platforms.
+* *Note: `mark_plan_handled()` has been deprecated. Python should return a boolean directly from the callback instead.*
+
+* Backfill workflows now correctly parse and handle `.tar.gz` source distributions alongside wheels.
+* Updated PyPy wheel build arguments and temporarily removed WebAssembly target steps.
+* Fixed race conditions in exotic wheel workflow polling.
+* Cleaned up repository tracking (removed accidental `uvs_lib.rs` duplication).
+
+---
+
+**📝 Code Changes:**
+- UPDATE: crates/uv-ffi/python/uv_ffi/__init__.py (260 lines changed)
+- UPDATE: crates/uv-ffi/src/lib.rs (310 lines changed)
+- UPDATE: crates/uv/src/commands/pip/install.rs (258 lines changed)
+- UPDATE: crates/uv/src/commands/pip/operations.rs (75 lines changed)
+- UPDATE: crates/uv/src/lib.rs (13 lines changed)
+
+**⚙️ Configuration:**
+- crates/uv-ffi/pyproject.toml (8 lines)
+
+**New Features:**
+- feat: 12ms bubble installs via persistent BUBBLE_SITE_PACKAGES_CACHE
+
+**Bug Fixes:**
+- fix: route bubble staging through /tmp — 13ms installs
+
+**Updates:**
+- Update README.md
+- Update build args for PyPy wheel in workflow
+- Update PyPy wheel build and remove WebAssembly steps
+
+_14 files changed, 830 insertions(+), 175 deletions(-)_
+
 ## [0.10.8.post14] — 2026-05-10
 
 improve exotic-wheels installation reliability and index compatibility
