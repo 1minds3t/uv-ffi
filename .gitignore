@@ -57,3 +57,4 @@ profile.json.gz
 
 # gitship diff exports (auto-added by gitship)
 gitship_exports/
+crates/uv/src/uvs_lib.rs
