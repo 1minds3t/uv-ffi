@@ -42,7 +42,7 @@ Omnipkg = "https://pypi.org/project/omnipkg/"
 "Extended Wheels" = "https://exotic-wheels.github.io/"
 
 [tool.maturin]
-module-name = "uv_ffi.uv_ffi"
-python-packages = ["python/uv_ffi"]
+module-name = "uv_ffi._native"
+python-packages = ["python"]
+python-source = "python"
 include = ["LICENSE-MIT", "NOTICE"]
-

@@ -127,15 +127,21 @@ async fn run_pip_install_direct(
             uv::BUBBLE_INSTALL.store(true, std::sync::atomic::Ordering::SeqCst);
         }
         let target_path = std::path::Path::new(tdir);
-        let all_satisfied = packages.iter().all(|pkg_spec| {
-            if let Some((name, ver)) = pkg_spec.split_once("==") {
-                let normalized = name.replace('-', "_").to_lowercase();
-                let dist_info = format!("{}-{}.dist-info", normalized, ver);
-                target_path.join(&dist_info).exists()
-            } else {
-                false
-            }
-        });
+        let all_satisfied = !uv::FORCE_RESCAN.load(std::sync::atomic::Ordering::SeqCst)
+            && packages.iter().all(|pkg_spec| {
+                if let Some((name, ver)) = pkg_spec.split_once("==") {
+                    let normalized = name.replace('-', "_").to_lowercase();
+                    let dist_info = format!("{}-{}.dist-info", normalized, ver);
+                    // Both the dist-info AND the package dir (or .py module) must exist.
+                    // A dist-info with no pkg dir is a ghost — not satisfied.
+                    let di_ok = target_path.join(&dist_info).exists();
+                    let pkg_ok = target_path.join(&normalized).is_dir()
+                        || target_path.join(format!("{}.py", normalized)).exists();
+                    di_ok && pkg_ok
+                } else {
+                    false
+                }
+            });
         if all_satisfied && !packages.is_empty() {
             uv::BUBBLE_INSTALL.store(false, std::sync::atomic::Ordering::SeqCst);
             return Ok(Changelog::default());
@@ -433,32 +439,51 @@ fn run_uv_internal(cmd: &str) -> (i32, Option<Changelog>, String) {
     static PROFILE_INIT: std::sync::Once = std::sync::Once::new();
     PROFILE_INIT.call_once(init_profile);
 
+    // Resolve sys.executable once here while the GIL is held by the calling
+    // Python thread and we are NOT yet inside block_on — safe from re-entrancy.
+    let sys_executable: String = ENGINE.get()
+        .map(|e| e.python_exe.to_string_lossy().into_owned())
+        .unwrap_or_else(|| {
+            pyo3::Python::with_gil(|py| {
+                py.import_bound("sys")
+                    .ok()
+                    .and_then(|sys| {
+                        use pyo3::prelude::PyAnyMethods;
+                        sys.getattr("executable").ok()
+                            .and_then(|e| e.extract::<String>().ok())
+                    })
+                    .unwrap_or_else(|| "python3".to_string())
+            })
+        });
+
     // ── Engine fast path: bypass uv::run() entirely ───────────────────────
+    // Handles all `pip install` commands — with or without --python / --target.
+    // When --python is absent, sys_executable is used so target_dir is never
+    // dropped and no interpreter query panic can occur.
     if let Some(opts) = try_parse_ffi_install(cmd) {
-        if let Some(ref python) = opts.python {
-            let _t = std::time::Instant::now();
-            let _t_blockon = std::time::Instant::now();
-            let result = RUNTIME.block_on(run_pip_install_direct(
-                opts.packages,
-                opts.reinstall,
-                opts.link_mode.map(|lm| match lm {
-                    uv_install_wheel::LinkMode::Symlink  => "symlink".to_string(),
-                    uv_install_wheel::LinkMode::Hardlink => "hardlink".to_string(),
-                    uv_install_wheel::LinkMode::Clone    => "clone".to_string(),
-                    uv_install_wheel::LinkMode::Copy     => "copy".to_string(),
-                }),
-                opts.index_url,
-                opts.extra_index_url,
-                python,
-                opts.target_dir,
-            ));
-            prof!("post-block_on", _t_blockon);
-            prof!("post-run_uv (engine)", _t);
-            return match result {
-                Ok(cl)  => (0, Some(cl), String::new()),
-                Err(e)  => { let msg = format!("{:?}", e); eprintln!("[UV-FFI] error: {}", msg); (1, None, msg) },
-            };
-        }
+        let python_exe: String = opts.python.clone().unwrap_or_else(|| sys_executable.clone());
+        let _t = std::time::Instant::now();
+        let _t_blockon = std::time::Instant::now();
+        let result = RUNTIME.block_on(run_pip_install_direct(
+            opts.packages,
+            opts.reinstall,
+            opts.link_mode.map(|lm| match lm {
+                uv_install_wheel::LinkMode::Symlink  => "symlink".to_string(),
+                uv_install_wheel::LinkMode::Hardlink => "hardlink".to_string(),
+                uv_install_wheel::LinkMode::Clone    => "clone".to_string(),
+                uv_install_wheel::LinkMode::Copy     => "copy".to_string(),
+            }),
+            opts.index_url,
+            opts.extra_index_url,
+            &python_exe,
+            opts.target_dir,
+        ));
+        prof!("post-block_on", _t_blockon);
+        prof!("post-run_uv (engine)", _t);
+        return match result {
+            Ok(cl)  => (0, Some(cl), String::new()),
+            Err(e)  => { let msg = format!("{:?}", e); eprintln!("[UV-FFI] error: {}", msg); (1, None, msg) },
+        };
     }
     // ── Fallback: uv::run() path ──────────────────────────────────────────
 
@@ -527,6 +552,55 @@ fn run_uv(cmd: &str) -> (i32, Option<Changelog>, String) {
             return run_uv_internal(cmd);
         }
 
+        // Corrupted wheel cache: uv extracted an archive whose internal METADATA
+        // version doesn't match the wheel filename (e.g. METADATA was patched on
+        // disk, corrupting the archive-v0 entry). uv hard-fails instead of healing.
+        // Fix: find the archive entry containing the bad wheel and delete it so
+        // uv re-extracts a clean copy on retry. Zero cost on the happy path.
+        if err.contains("Wheel version does not match filename")
+            || err.contains("indicates a malformed wheel")
+        {
+            // Extract package name from error: "Failed to install: rich-14.3.3-py3-none-any.whl"
+            let bad_stem = err
+                .lines()
+                .find(|l| l.contains("Failed to install:") || l.contains("indicates a malformed wheel"))
+                .and_then(|l| l.split("Failed to install:").nth(1))
+                .and_then(|l| l.split_whitespace().next())
+                .map(|s| s.trim_end_matches(".whl").to_string());
+
+            if let Some(ref stem) = bad_stem {
+                let cache_root = std::env::var("UV_CACHE_DIR")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| {
+                        dirs::cache_dir()
+                            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                            .join("uv")
+                    });
+                let archive_root = cache_root.join("archive-v0");
+                eprintln!("[UV-FFI] Corrupted wheel cache detected for {:?} — scanning archive for eviction", stem);
+                if let Ok(rd) = std::fs::read_dir(&archive_root) {
+                    for entry in rd.flatten() {
+                        // Each entry is a content-addressed dir; check if it
+                        // contains a dist-info whose METADATA has the bad version.
+                        let parts: Vec<&str> = stem.splitn(4, '-').collect();
+                        let di_name = if parts.len() >= 2 {
+                            format!("{}-{}.dist-info", parts[0], parts[1])
+                        } else {
+                            format!("{}.dist-info", stem)
+                        };
+                        // Simpler: check for any subdir matching the wheel stem
+                        let candidate = entry.path();
+                        if candidate.join(&di_name).join("METADATA").exists() {
+                            eprintln!("[UV-FFI] Evicting corrupted archive: {:?}", candidate);
+                            let _ = std::fs::remove_dir_all(&candidate);
+                            break;
+                        }
+                    }
+                }
+            }
+            // Fall through to registry reset + retry below.
+        }
+
         // Registry cache stale: newly published package version not in RAM.
         // Clear the registry client and retry once.
         if is_profile_enabled() {
@@ -544,9 +618,52 @@ fn run_uv(cmd: &str) -> (i32, Option<Changelog>, String) {
     (rc, changelog, err)
 }
 
+pub static INSTALL_PLAN: std::sync::Mutex<Vec<(String, String, String)>> =
+    std::sync::Mutex::new(Vec::new());
+
+// Stored separately in uv-ffi so pyo3 PyObject doesn't leak into the uv crate
+pub static PLAN_READY_PY_CALLBACK: std::sync::Mutex<Option<pyo3::PyObject>> =
+    std::sync::Mutex::new(None);
+
+#[pyo3::pyfunction]
+fn get_install_plan() -> Vec<(String, String, String)> {
+    uv::INSTALL_PLAN.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+
+fn fire_plan_callback(entries: Vec<(String, String, String)>) -> bool {
+    if let Ok(g) = PLAN_READY_PY_CALLBACK.lock() {
+        if let Some(ref cb) = *g {
+            return pyo3::Python::with_gil(|py| {
+                if cb.is_none(py) { return false; }
+                match cb.call1(py, (entries,)) {
+                    Ok(result) => match result.is_truthy(py) {
+                        Ok(b) => { eprintln!("[FFI-PLAN] callback returned {}", b); b }
+                        Err(e) => { eprintln!("[FFI-PLAN] is_truthy err: {:?}", e); false }
+                    },
+                    Err(e) => { eprintln!("[FFI-PLAN] callback threw: {:?}", e); false }
+                }
+            });
+        }
+    }
+    false
+}
+
+#[pyo3::pyfunction]
+fn set_plan_callback(cb: pyo3::PyObject) {
+    if let Ok(mut g) = PLAN_READY_PY_CALLBACK.lock() {
+        *g = Some(cb);
+    }
+    if let Ok(mut g) = uv::PLAN_READY_CALLBACK.lock() {
+        *g = Some(fire_plan_callback);
+    }
+}
+
 #[pyo3::pyfunction]
 fn evict_bubble_cache() {
     if let Ok(mut g) = uv::BUBBLE_SITE_PACKAGES_CACHE.lock() { g.clear(); }
+    uv::FORCE_RESCAN.store(true, std::sync::atomic::Ordering::SeqCst);  // ADD THIS
+
 }
 
 #[pyo3::pyfunction]
@@ -723,7 +840,7 @@ fn evict_packages_from_bubble_cache(names: Vec<String>) {
 }
 
 #[pyo3::pymodule]
-fn uv_ffi(_py: pyo3::Python, m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {
+fn _native(_py: pyo3::Python, m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(run, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(invalidate_site_packages_cache, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(patch_site_packages_cache, m)?)?;
@@ -732,6 +849,8 @@ fn uv_ffi(_py: pyo3::Python, m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3
     m.add_function(pyo3::wrap_pyfunction!(evict_bubble_cache, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(evict_packages_from_bubble_cache, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(patch_bubble_site_packages_cache, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(get_install_plan, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(set_plan_callback, m)?)?;
     Ok(())
 }
 

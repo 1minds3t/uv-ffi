@@ -25,7 +25,13 @@ use crate::commands::pip::operations::Changelog;
 pub static INSTALL_CHANGELOG: std::sync::Mutex<Option<Changelog>> =
     std::sync::Mutex::new(None);
 use std::sync::Arc;
-
+pub static INSTALL_PLAN: std::sync::Mutex<Vec<(String, String, String)>> =
+    std::sync::Mutex::new(Vec::new());
+pub static PLAN_READY_CALLBACK: std::sync::Mutex<Option<fn(Vec<(String, String, String)>) -> bool>> =
+    std::sync::Mutex::new(None);
+// delete PLAN_HANDLED entirely
+pub static PLAN_HANDLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 pub static SITE_PACKAGES_CACHE: std::sync::Mutex<Option<Arc<uv_installer::SitePackages>>> =
     std::sync::Mutex::new(None);
 pub static BUBBLE_SITE_PACKAGES_CACHE: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, Arc<uv_installer::SitePackages>>>> =

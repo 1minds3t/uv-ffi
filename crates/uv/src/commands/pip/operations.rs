@@ -134,6 +134,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
     printer: Printer,
 ) -> Result<ResolverOutput, Error> {
     let start = std::time::Instant::now();
+    if let Ok(mut g) = crate::INSTALL_PLAN.lock() { g.clear(); }
 
     // Resolve the requirements from the provided sources.
     let requirements = {
@@ -575,6 +576,7 @@ pub(crate) async fn install(
     preview: Preview,
 ) -> Result<Changelog, Error> {
     let start = std::time::Instant::now();
+    if let Ok(mut g) = crate::INSTALL_PLAN.lock() { g.clear(); }
 
     // Partition into those that should be linked from the cache (`local`), those that need to be
     // downloaded (`remote`), and those that should be removed (`extraneous`).
@@ -595,6 +597,29 @@ pub(crate) async fn install(
             tags,
         )
         .context("Failed to determine installation plan")?;
+
+    // FFI: publish plan, fire callback, bail out if Python handled it.
+    let plan_handled = {
+        use uv_distribution_types::Name;
+        let mut entries: Vec<(String, String, String)> = Vec::new();
+        for dist in &plan.cached {
+            entries.push((dist.name().to_string(), dist.filename().version.to_string(), "cached".to_string()));
+        }
+        for dist in &plan.remote {
+            entries.push((dist.name().to_string(), dist.version().map(|v| v.to_string()).unwrap_or_default(), "remote".to_string()));
+        }
+        for dist in &plan.reinstalls {
+            entries.push((dist.name().to_string(), dist.version().to_string(), "reinstall".to_string()));
+        }
+        for dist in &plan.extraneous {
+            entries.push((dist.name().to_string(), dist.version().to_string(), "extraneous".to_string()));
+        }
+        if let Ok(mut g) = crate::INSTALL_PLAN.lock() { *g = entries.clone(); }
+        if let Ok(g) = crate::PLAN_READY_CALLBACK.lock() {
+            if let Some(cb) = *g { cb(entries) } else { false }
+        } else { false }
+    };
+    if plan_handled { return Ok(Changelog::default()); }
 
     if dry_run.enabled() {
         return report_dry_run(
@@ -766,6 +791,7 @@ async fn execute_plan(
         vec![]
     } else {
         let start = std::time::Instant::now();
+    if let Ok(mut g) = crate::INSTALL_PLAN.lock() { g.clear(); }
 
         let preparer = Preparer::new(
             cache,
@@ -801,6 +827,7 @@ async fn execute_plan(
     let uninstalls = extraneous.into_iter().chain(reinstalls).collect::<Vec<_>>();
     if !uninstalls.is_empty() {
         let start = std::time::Instant::now();
+    if let Ok(mut g) = crate::INSTALL_PLAN.lock() { g.clear(); }
 
         for dist_info in &uninstalls {
             match uv_installer::uninstall(dist_info).await {
@@ -841,6 +868,52 @@ async fn execute_plan(
     let mut installs = wheels.into_iter().chain(cached).collect::<Vec<_>>();
     if !installs.is_empty() {
         let start = std::time::Instant::now();
+    if let Ok(mut g) = crate::INSTALL_PLAN.lock() { g.clear(); }
+        // ── Orphan-dir wipe (Bug 3 fix) ─────────────────────────────────────────────
+        // In --target mode uv never uninstalls before installing (there is no dist-info
+        // to uninstall *from* when the prior dist-info was externally deleted).  The
+        // Installer just overlays new files on top of the existing directory, leaving
+        // stale files (e.g. STALE_MARKER.py, old .py from a previous version) behind.
+        //
+        // Before handing off to Installer::new(), scan each package that is about to be
+        // installed.  If a same-named directory exists in the site-packages root but
+        // there is NO corresponding *.dist-info for that name, the directory is an
+        // orphan: wipe it so the subsequent install starts from a clean slate.
+        {
+            use uv_distribution_types::Name;
+            // site_packages() returns an iterator; for --target installs the first (and
+            // only) entry is the target dir itself.
+            if let Some(sp_root) = venv.site_packages().next() {
+                for dist in &installs {
+                    let pkg_name = dist.name().as_dist_info_name();
+                    // normalise: replace '-' with '_' to match the filesystem convention
+                    let dir_name = pkg_name.replace('-', "_");
+                    let pkg_dir = sp_root.join(&dir_name);
+                    if pkg_dir.is_dir() {
+                        // Check whether a dist-info exists for this package name.
+                        // If not → orphan; remove so the fresh install is clean.
+                        let has_dist_info = std::fs::read_dir(&sp_root)
+                            .map(|rd| {
+                                rd.flatten()
+                                .any(|e| {
+                                    let n = e.file_name();
+                                    let s = n.to_string_lossy();
+                                    s.ends_with(".dist-info")
+                                        && s.to_lowercase().starts_with(&pkg_name.to_lowercase())
+                                })
+                            })
+                            .unwrap_or(false);
+                        if !has_dist_info {
+                            eprintln!(
+                                "[UV-FFI] Orphan dir detected (no dist-info): {:?} — wiping before install",
+                                pkg_dir
+                            );
+                            let _ = std::fs::remove_dir_all(&pkg_dir);
+                        }
+                    }
+                }
+            }
+        }
         installs = uv_installer::Installer::new(venv, preview)
             .with_link_mode(link_mode)
             .with_cache(cache)

@@ -352,25 +352,7 @@ pub async fn pip_install(
             }
             sp
         } else {
-            // For bubble installs, scan ONLY the target directory — not the merged
-            // view that with_target() produces (which includes main site-packages).
-            // Scanning the merged view poisons BUBBLE_SITE_PACKAGES_CACHE with main-env
-            // packages, causing the resolver to emit spurious uninstalls against the
-            // real main site-packages on disk.
-            let sp = if is_bubble {
-                // For bubble installs, scan only the bare interpreter env (no
-                // merged main site-packages). with_target() merges the conda
-                // env's ~800 packages into the site_packages view, which the
-                // resolver processes as preferences and costs ~17ms extra.
-                // A clean interpreter env gives the resolver a zero-package
-                // baseline — same as what /tmp targets see.
-                let bare_env = uv_python::PythonEnvironment::from_interpreter(
-                    environment.interpreter().clone()
-                );
-                SitePackages::from_environment(&bare_env)?
-            } else {
-                SitePackages::from_environment(&environment)?
-            };
+            let sp = SitePackages::from_environment(&environment)?;
             if !is_bubble {
                 if let Ok(mut g) = crate::SITE_PACKAGES_CACHE.lock() { *g = Some(std::sync::Arc::new(sp.clone())); }
             } else {
@@ -386,6 +368,102 @@ pub async fn pip_install(
                     sp.iter().count());
             }
             sp
+        }
+    };
+
+    // Ghost dist-info eviction: only runs for --target (bubble) installs —
+    // never touches main env site-packages.
+    let site_packages = {
+        let sp_roots: Vec<std::path::PathBuf> = if let Some(ref root) = bubble_target_root {
+            vec![root.clone()]
+        } else {
+            vec![]
+        };
+        let mut evicted_any = false;
+        for sp_root in &sp_roots {
+            let Ok(rd) = std::fs::read_dir(sp_root) else { continue };
+            for entry in rd.flatten() {
+                let fname = entry.file_name();
+                let s = fname.to_string_lossy();
+                if !s.ends_with(".dist-info") { continue; }
+                let di_path = entry.path();
+                if !di_path.is_dir() { continue; }
+                let direct_url = di_path.join("direct_url.json");
+                if direct_url.exists() {
+                    if let Ok(text) = std::fs::read_to_string(&direct_url) {
+                        if text.contains("\"dir\"") || text.contains("editable") {
+                            continue;
+                        }
+                    }
+                }
+                let stem = &s[..s.len() - ".dist-info".len()];
+                let pkg_name_raw = stem.rsplit_once('-').map(|(n, _)| n).unwrap_or(stem);
+                let normalized = pkg_name_raw.replace('-', "_");
+                let top_level_path = di_path.join("top_level.txt");
+                let top_dirs: Vec<String> = if top_level_path.exists() {
+                    std::fs::read_to_string(&top_level_path)
+                        .unwrap_or_default()
+                        .lines()
+                        .map(|l| l.trim().to_string())
+                        .filter(|l| !l.is_empty())
+                        .collect()
+                } else {
+                    let record_path = di_path.join("RECORD");
+                    let mut tops: Vec<String> = Vec::new();
+                    if let Ok(record) = std::fs::read_to_string(&record_path) {
+                        for line in record.lines() {
+                            let path_part = line.split(',').next().unwrap_or("").trim();
+                            if path_part.is_empty() { continue; }
+                            let first = std::path::Path::new(path_part)
+                                .components()
+                                .next()
+                                .and_then(|c| match c {
+                                    std::path::Component::Normal(s) => s.to_str().map(|s| s.to_string()),
+                                    _ => None,
+                                });
+                            if let Some(top) = first {
+                                if top.ends_with(".dist-info") || top == "__pycache__" { continue; }
+                                if top.ends_with(".data") { continue; }
+                                let dir_name = if top.ends_with(".py") {
+                                    top[..top.len()-3].to_string()
+                                } else {
+                                    top.clone()
+                                };
+                                if !tops.contains(&dir_name) {
+                                    tops.push(dir_name);
+                                }
+                            }
+                        }
+                    }
+                    if tops.is_empty() { vec![normalized.clone()] } else { tops }
+                };
+                if top_dirs.is_empty() { continue; }
+                let is_ghost = top_dirs.iter().all(|d| {
+                    !sp_root.join(d).is_dir()
+                        && !sp_root.join(format!("{}.py", d)).exists()
+                });
+                if is_ghost {
+                    eprintln!("[UV-FFI] Ghost dist-info (pkg absent): {:?} — evicting", di_path);
+                    let _ = std::fs::remove_dir_all(&di_path);
+                    evicted_any = true;
+                }
+            }
+        }
+        // Rescan the bubble target dir so the Planner sees the corrected view.
+        // Only runs for bubble installs (sp_roots was non-empty) and only when
+        // something was actually evicted. Never rescans main env.
+        if evicted_any {
+            debug_assert!(bubble_target_root.is_some(), "evicted_any=true but no bubble_target_root");
+            let sp = SitePackages::from_environment(&environment)?;
+            let key = bubble_target_root.as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if let Ok(mut g) = crate::BUBBLE_SITE_PACKAGES_CACHE.lock() {
+                g.insert(key, std::sync::Arc::new(sp.clone()));
+            }
+            sp
+        } else {
+            site_packages
         }
     };
 
