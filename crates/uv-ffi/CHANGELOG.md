@@ -41,7 +41,11 @@ This is a landmark architectural release for `uv-ffi`. It introduces atomic, sel
 - UPDATE: crates/uv/src/lib.rs (13 lines changed)
 
 **⚙️ Configuration:**
-- crates/uv-ffi/pyproject.toml (8 lines)
+- crates/uv-ffi/pyproject.toml (10 lines)
+
+**Additional Changes:**
+- Update configuration
+- feat(uv-ffi): install plan IPC, self-healing bubble installs, _native rename
 
 **New Features:**
 - feat: 12ms bubble installs via persistent BUBBLE_SITE_PACKAGES_CACHE
@@ -54,7 +58,7 @@ This is a landmark architectural release for `uv-ffi`. It introduces atomic, sel
 - Update build args for PyPy wheel in workflow
 - Update PyPy wheel build and remove WebAssembly steps
 
-_14 files changed, 830 insertions(+), 175 deletions(-)_
+_15 files changed, 882 insertions(+), 176 deletions(-)_
 
 ## [0.10.8.post14] — 2026-05-10
 
